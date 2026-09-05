@@ -19,7 +19,7 @@ def load_raw(path : str = PATH, names : list[str] = csvs) -> list[pl.DataFrame]:
 # For now, targets don't have an explicit detected/not label which is super annoying
 def label_error(error : pl.DataFrame) -> pl.DataFrame:
     error = error.with_columns(
-        pl.col("position_error_x_m").is_not_nan().cast(pl.Int8).alias("detected")
+        pl.col("position_error_x_m").is_not_null().cast(pl.Int8).alias("detected")
     )
     return error
 

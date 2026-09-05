@@ -8,7 +8,11 @@ authors = [
 ]
 requires-python = ">=3.14"
 dependencies = [
+    "lightgbm>=4.7.0.99",
+    "numpy>=2.5.2",
+    "plotly>=7.0.0",
     "polars",
+    "scikit-learn>=1.9.0",
 ]
 
 [project.scripts]
@@ -20,3 +24,15 @@ build-backend = "uv_build"
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+lightgbm = { path = "/home/owen-0g/LightGBM/dist/lightgbm-4.7.0.99-py3-none-any.whl" }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,7 +1,10 @@
 import sys
 import polars as pl
 from pathlib import Path
+from sklearn.model_selection import GroupShuffleSplit
 from src.features import *
+from sklearn.model_selection import train_test_split
+
 
 CACHE_PATH = "data/feature_cache/"
 INDEP_NAME = "indep_features.csv"
@@ -39,14 +42,35 @@ def load_indep_features(df : pl.DataFrame) -> pl.DataFrame:
     feature_list = [f.value for f in IndepFeature]
     labels = indep.select("detected")
     features = indep.select(feature_list)
-    return pl.concat([features, labels], how = "horizontal")
+    tags = indep.select(["scenario_id", "drop_id", "target_id"])
+    return pl.concat([tags, features, labels], how = "horizontal")
 
 
-def load_indep(path :str = CACHE_PATH, name : str = INDEP_NAME) -> tuple[pl.DataFrame, pl.DataFrame]:
-    df = pl.read_csv(path + name)
-    labels = df["detected"].to_numpy()
-    features = df.drop()
-    
+def load_indep(path :str = CACHE_PATH, name : str = INDEP_NAME) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    df = pl.read_csv(path + name, infer_schema_length=None)
+    labels = df.select("detected")
+
+    feature_list = [f.value for f in IndepFeature]
+    features = df.select(feature_list)
+    tags = df.select(
+        ["scenario_id", "drop_id", "target_id"]
+    )
+    return tags, labels, features
+
+
+def load_default_split():
+    _ , labels, features = load_indep()
+    [X_train, X_val, y_train, y_val] =  train_test_split(features, labels, test_size=0.2, random_state=42)
+    return [X_train, X_val, y_train, y_val]
+
+# Prefer to use gss to prevent same drop train-validation leakage
+def load_group_split():
+    tags, labels, features = load_indep()
+    groups = tags.select(pl.struct(["scenario_id", "drop_id"]).hash()).to_series().to_numpy()
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, val_idx = next(gss.split(features, labels, groups=groups))
+    gss_split = [features[train_idx], features[val_idx], labels[train_idx], labels[val_idx]]
+    return gss_split
 
 #-------------------------------Pairwise Classifier--------------------------------------#
 
