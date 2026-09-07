@@ -102,5 +102,25 @@ PRIMARY_FEATURES = [
                         IndepFeature.AZ_OFF_BORESIGHT
                     ]
 
-LIM, WIDTH = 4.0, 0.5          # same axis + same bins for all features
+
+def plot_z_scores(data, preds, labels, features, n_bins):
+    for feature in features:
+        chi_sum, Z_scores = chi_squared(data, preds, labels, feature, n_bins)
+        fig = go.Figure(
+            data = [
+                go.Bar(y = Z_scores)
+            ]
+        )
+
+        fig.update_layout(
+            title = f"{feature.value} Chi Squared : {chi_sum} ",
+            yaxis_title = "Z-score",
+            bargap = 0.05
+        )
+
+        fig.write_html(f"figures/chi_squared/{feature.value}_zscore.html")
+
+plot_z_scores(X_val, preds, y_val, PRIMARY_FEATURES, 8)
+
+
 
