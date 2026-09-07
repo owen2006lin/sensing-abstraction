@@ -6,13 +6,17 @@ readme = "README.md"
 authors = [
     { name = "owen2006lin", email = "owen2006lin@gmail.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "lightgbm>=4.7.0.99",
+    "matplotlib>=3.11.1",
+    "numba>=0.59.0",
     "numpy>=2.5.2",
     "plotly>=7.0.0",
     "polars",
+    "pyarrow>=25.0.1",
     "scikit-learn>=1.9.0",
+    "shap>=0.45.0",
 ]
 
 [project.scripts]

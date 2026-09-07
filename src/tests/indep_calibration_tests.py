@@ -1,11 +1,13 @@
 import lightgbm as lgb
 from src.load import *
+from src.features import *
 from sklearn.model_selection import train_test_split
 from typing import cast
 import numpy as np
 import math
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 
 
 MODEL_PATH = "models/indep_model.txt"
@@ -85,8 +87,8 @@ def plot_confusion(preds, labels, thresholds : list[float] = [0.3, 0.5]):
 from scipy.special import logit, expit
 
 
-def chunk(n_bins : int):
-    zipped = zip(preds, y_val)
+def chunk(preds, labels, n_bins : int):
+    zipped = zip(preds, labels)
     s = sorted(zipped)
 
     chunks = [chunk.tolist() for chunk in np.array_split(s, n_bins)]
@@ -102,9 +104,9 @@ def chunk(n_bins : int):
         freq.append(prob)
     return p_hat, freq
 
-# Plotting with raw probabilities, but many points are clustered at 1.0, so may not be that informative
-def plot_reliability(n_bins : int):
-    p_hat, freq = chunk(n_bins)
+
+def plot_reliability(preds, labels, n_bins : int):
+    p_hat, freq = chunk(preds, labels, n_bins)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="perfect",
@@ -121,7 +123,6 @@ def plot_reliability(n_bins : int):
 
 # Instead, we should plot the logits using a log scale, so the groups aren't too close together visually
 TICKS = np.array([0.01, 0.05, 0.2, 0.5, 0.8, 0.95, 0.99, 0.999])
-
 def plot_reliability_logits(n_bins : int, ticks = TICKS):
     p_hat, freq = chunk(n_bins)
 
@@ -157,7 +158,263 @@ def plot_reliability_logits(n_bins : int, ticks = TICKS):
 #--------------------------------------------------------------------------------------------------------------------#
 
 # Example usage:
-plot_reliability(20)
-plot_reliability_logits(20)
+# plot_reliability(20)
+# plot_reliability_logits(20)
 
 #--------------------------------------------------------------------------------------------------------------------#
+
+# (3) Expected calibration error
+
+
+
+def ece_adaptive(preds, labels, n_bins):
+    n = len(preds)
+    conf, acc = chunk(preds, labels, n_bins)
+    ece = 0
+    chunks = [chunk.tolist() for chunk in np.array_split(preds, n_bins)]
+
+    for i in range(len(conf)):
+        diff = np.abs(conf[i] - acc[i])
+        scale = len(chunks[i])/n
+        ece += scale * diff
+
+    return ece
+
+
+def ece(preds, labels, n_bins):
+    preds = np.asarray(preds)
+    labels = np.asarray(labels)
+    n = len(preds)
+
+    order = np.argsort(preds)
+    preds_sorted = preds[order]
+    labels_sorted = labels[order]
+
+    bin_edges = np.round(np.linspace(0, n, n_bins + 1)).astype(int)
+
+    total_error = 0.0
+    for i in range(n_bins):
+        start, end = bin_edges[i], bin_edges[i + 1]
+        if start == end:
+            continue
+
+        chunk_preds = preds_sorted[start:end]
+        chunk_labels = labels_sorted[start:end]
+
+        avg_confidence = chunk_preds.mean()
+        avg_accuracy = chunk_labels.mean()
+        bin_weight = (end - start) / n
+
+        total_error += bin_weight * abs(avg_confidence - avg_accuracy)
+
+    return total_error
+
+
+
+
+# (4) Hosmer - Lemeshow
+from scipy.stats import chi2
+
+def hosmer_lemeshow(preds, labels, n_bins):
+    zipped = zip(preds, labels)
+    s = sorted(zipped)
+    chunks = [chunk.tolist() for chunk in np.array_split(s, n_bins)]
+
+    hl_val = 0
+
+    for chunk in chunks:
+        n = len(chunk)
+        sums = list(map(sum, zip(*chunk)))
+        expected = sums[0]
+        observed = sums[1]
+
+        term = (observed - expected)**2 / (expected*(1-(expected/n)))
+
+        hl_val += term
+
+    dof = n_bins - 2
+    p_value = chi2.sf(hl_val, dof)
+    return hl_val, p_value
+
+
+# (5) Spieghalter Z-test
+
+def spieghalter(preds, labels) -> int:
+    zipped = zip(preds, labels)
+
+    top = 0
+    bottom = 0
+    for (pred, label) in zipped:
+        top += (label - pred)*(1 - (2*pred))
+        bottom += ((1 - (2*pred))**2) * pred * (1 - pred)
+
+    bottom = np.sqrt(bottom)
+    return (top/bottom)
+
+
+
+# (6) Brier Score + Murphy's Deomposition
+
+def brier(preds, labels):
+    n = len(preds)
+    zipped = zip(preds, labels)
+    score = 0
+
+    for (pred, label) in zipped:
+        score += (pred - label)**2
+
+    return score / n
+
+def murphy_decomp(preds, labels, n_bins):
+    b_score = brier(preds, labels)
+    N = len(preds)
+
+    zipped = zip(preds, labels)
+    s = sorted(zipped)
+    o = sum(b for a, b in s) / N
+
+    rel = 0
+    res = 0
+    unc = o * (1 - o)
+
+
+
+
+    chunks = [chunk.tolist() for chunk in np.array_split(s, n_bins)]
+    for chunk in chunks:
+        n = len(chunk)
+        sums = list(map(sum, zip(*chunk)))
+
+        mean_p = sums[0] / len(chunk)
+        prob = sums[1] / len(chunk)
+        val = n * (mean_p - prob)**2
+        rel += val
+
+        res += (prob - o)**2 * n
+
+    rel = rel / N
+    res = res / N
+
+    return {
+        "brier_score": b_score,
+        "reliability": rel,
+        "resolution": res,
+        "uncertainty": unc,
+        "reconstructed_brier": rel - res + unc,  # should ≈ brier_score
+    }
+
+
+
+
+# (7) Probability curve vs covariates
+
+# TreeSHAP for variance decomposition
+import shap
+import matplotlib.pyplot as plt
+from scipy.stats import beta
+def shap_explain(model : lgb.Booster, data : np.ndarray):
+    
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(data)
+
+    data = X_val.to_pandas()
+
+    shap.summary_plot(shap_values, data, show = False)
+    plt.savefig("figures/shap_summary.png")
+    plt.close()
+
+
+
+# From the figure, we can see primary features are:
+PRIMARY_FEATURES = [
+                        IndepFeature.RSS_MAX, 
+                        IndepFeature.RSS_TOTAL_DB, 
+                        IndepFeature.ABS_BISTATIC_DOPPLER_HZ,
+                        IndepFeature.NN_NORM_RANGE_SEP,
+                        IndepFeature.AZ_OFF_BORESIGHT
+                    ]
+
+def p_lower(n, x, alpha = 0.05):
+    if x == 0:
+        return 0
+    else:
+        return beta.ppf(alpha/2, x, n - x + 1)
+
+def p_upper(n, x, alpha = 0.05):
+    if x == n:
+        return 1
+    else:
+        return beta.ppf(1 - alpha/2, x + 1, n - x)
+
+
+    
+def clopper_pearson(model, data, labels, feature, n_bins):
+    preds = model.predict(data)
+    preds = pl.DataFrame({"prediction": preds})
+    labels = pl.DataFrame({"detected": labels})
+
+
+    col = data.select(feature)
+    combined = pl.concat([col, preds, labels], how = "horizontal")
+    s = combined.sort(feature)
+
+    chunks = [chunk.tolist() for chunk in np.array_split(s, n_bins)]
+
+    points = []
+
+    for chunk in chunks:
+        n = len(chunk)
+        sums = list(map(sum, zip(*chunk)))
+
+        detections = sums[2]
+        p_hat = detections / n
+        lower = p_lower(n, detections)
+        upper = p_upper(n, detections)
+
+        f_mid = sums[0] / n
+        mean_pred = sums[1] / n
+        points.append((f_mid, p_hat, lower, upper, mean_pred))
+
+    return points
+
+def plot_clopper_pearson(model, data, labels, features, n_bins):
+    preds = model.predict(data)
+
+    for feature in features:
+        points = clopper_pearson(model, data, labels, feature, n_bins)
+        f_mid, p_hat, lower, upper, mean_pred = zip(*points)  # each becomes a tuple
+
+        array = [u - p for u, p in zip(upper, p_hat)]
+        arrayminus = [p - l for p, l in zip(p_hat, lower)]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x = f_mid,
+            y = mean_pred,
+            mode='lines+markers',
+            name = 'Model prediction',
+            line = dict(color = 'royalblue')
+        )
+        )
+        fig.add_trace(go.Scatter(
+            x=f_mid,
+            y=p_hat,
+            mode='markers',
+            name=f'{feature} Empirical Pd (95% CI)',
+            marker=dict(size=8, color='firebrick'),
+            error_y=dict(
+                type='data',
+                symmetric=False,
+                array=array,
+                arrayminus=arrayminus,
+                visible=True,
+                thickness=2,
+                width=6
+            )
+        ))
+
+        fig.write_html(f"figures/clopper_pearson/{feature}_plot.html")
+
+# plot_clopper_pearson(model, X_val, y_val, PRIMARY_FEATURES, 20)
+        
+
