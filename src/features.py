@@ -1,7 +1,6 @@
 from enum import Enum, auto
 
-class Feature(str, Enum):
-    MYFEAT = "myfeat"
+
 
 
 class IndepFeature(str, Enum):
@@ -101,3 +100,12 @@ class PosFeature(str, Enum):
   N_TARGETS = "n_targets"
   NN_NORM_RANGE_SEP = "nn_norm_range_sep"
   NN_NORM_ANG_SEP = "nn_norm_ang_sep"
+
+
+Feature = Enum(
+  "Feature",
+    {member.name: member.value for member in [*IndepFeature, *PairFeature, *PosFeature]}
+)
+
+for f in Feature:
+  print(f.name, f.value)

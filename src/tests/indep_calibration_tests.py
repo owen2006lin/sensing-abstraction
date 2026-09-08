@@ -158,8 +158,8 @@ def plot_reliability_logits(n_bins : int, ticks = TICKS):
 #--------------------------------------------------------------------------------------------------------------------#
 
 # Example usage:
-# plot_reliability(20)
-# plot_reliability_logits(20)
+plot_reliability(20)
+plot_reliability_logits(20)
 
 #--------------------------------------------------------------------------------------------------------------------#
 
@@ -342,7 +342,7 @@ def p_lower(n, x, alpha = 0.05):
 
 def p_upper(n, x, alpha = 0.05):
     if x == n:
-        return 1
+        return 1 
     else:
         return beta.ppf(1 - alpha/2, x + 1, n - x)
 
@@ -417,4 +417,64 @@ def plot_clopper_pearson(model, data, labels, features, n_bins):
 
 # plot_clopper_pearson(model, X_val, y_val, PRIMARY_FEATURES, 20)
         
+# (8) Chi squared test
+def chunk(data, preds, labels, feature, n_bins : int):
+    col = data.select(feature).to_numpy().ravel()
+    zipped = zip(col, preds, labels)
+    s = sorted(zipped, key = lambda x : x[0])
+
+    chunks = [chunk.tolist() for chunk in np.array_split(s, n_bins)]
+
+    ret = []
+    for chunk in chunks:
+        sums = column_sums = list(map(sum, zip(*chunk)))
+        observed = sums[2]
+        expected = sums[1]
+        var = 0
+        for (_, p, _) in chunk:
+            var += p * (1-p)
+
+        z_bin = (observed - expected) / np.sqrt(var)
+
+        ret.append((observed, expected, z_bin))
+    return ret
+
+def chi_squared(data, preds, labels, feature, n_bins):
+    points = chunk(data, preds, labels, feature, n_bins)
+    chi_sum = 0
+    Z_scores = []
+    for point in points:
+        _, _, z_bin = point
+        chi_sum += (z_bin)**2
+        Z_scores.append(z_bin)
+
+    return chi_sum, Z_scores
+
+PRIMARY_FEATURES = [
+                        IndepFeature.RSS_MAX, 
+                        IndepFeature.RSS_TOTAL_DB, 
+                        IndepFeature.ABS_BISTATIC_DOPPLER_HZ,
+                        IndepFeature.NN_NORM_RANGE_SEP,
+                        IndepFeature.AZ_OFF_BORESIGHT
+                    ]
+
+
+def plot_z_scores(data, preds, labels, features, n_bins):
+    for feature in features:
+        chi_sum, Z_scores = chi_squared(data, preds, labels, feature, n_bins)
+        fig = go.Figure(
+            data = [
+                go.Bar(y = Z_scores)
+            ]
+        )
+
+        fig.update_layout(
+            title = f"{feature.value} Chi Squared : {chi_sum} ",
+            yaxis_title = "Z-score",
+            bargap = 0.05
+        )
+
+        fig.write_html(f"figures/chi_squared/{feature.value}_zscore.html")
+
+#plot_z_scores(X_val, preds, y_val, PRIMARY_FEATURES, 8)
 
