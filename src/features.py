@@ -107,5 +107,3 @@ Feature = Enum(
     {member.name: member.value for member in [*IndepFeature, *PairFeature, *PosFeature]}
 )
 
-for f in Feature:
-  print(f.name, f.value)

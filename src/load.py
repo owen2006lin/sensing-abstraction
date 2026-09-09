@@ -33,8 +33,7 @@ def indep_mutual_split(df : pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     non_mutual = df_tagged.filter(pl.col("group_size") == 1).drop("group_size")
 
     return mutual_pairs, non_mutual
-
-
+    
 
 #--------------------------------Independent Classifier---------------------------------#
 def load_indep_features(df : pl.DataFrame) -> pl.DataFrame:
@@ -74,8 +73,77 @@ def load_group_split():
 
 #-------------------------------Pairwise Classifier--------------------------------------#
 
+# Converts all pairs into single row of features
+# Duplicates pairs to enforce symmetry by rearranging order
+SHARED_FEATURES = [
+    PosFeature.N_TARGETS.value,
+    PosFeature.NN_NORM_RANGE_SEP.value,
+    PosFeature.NN_NORM_ANG_SEP.value
+]
 
+FEAT = [feat.value for feat in PairFeature if feat not in SHARED_FEATURES]
+FEATURE_COLS = [f"{f}_{suffix}" for f in FEAT for suffix in ("a", "b")]
 
+def process_pair(df : pl.DataFrame):
+    (pair , _) = indep_mutual_split(df)
+    grouped = pair.group_by(MATCH_COLS)    
+
+    shared_tags = ["scenario_id", "drop_id"]
+    target_ids = ["target_id_a", "target_id_b"]
+    features_ab = FEATURE_COLS
+    pair_feats = SHARED_FEATURES
+    detected_cols = ["detected_a", "detected_b"]
+    cols = shared_tags + target_ids + features_ab + pair_feats + detected_cols
+
+    chunks = []
+
+    for key, sub in grouped:
+        row_a, row_b = sub[0], sub[1]
+        merged = pl.concat(
+            [
+                row_a.select(shared_tags),
+                row_a.select((pl.col("target_id")).name.suffix("_a")),
+                row_b.select((pl.col("target_id")).name.suffix("_b")),
+                row_a.select(pl.col(FEAT).name.suffix("_a")),
+                row_b.select(pl.col(FEAT).name.suffix("_b")),
+                row_a.select((pl.col("detected")).name.suffix("_a")),
+                row_b.select((pl.col("detected")).name.suffix("_b")),
+                row_a.select(SHARED_FEATURES),
+            ],
+            how = "horizontal"
+        )
+        chunks.append(merged)
+
+    for key, sub in grouped:
+        row_a, row_b = sub[1], sub[0]
+        merged = pl.concat(
+            [
+                row_a.select(shared_tags),
+                row_a.select((pl.col("target_id")).name.suffix("_a")),
+                row_b.select((pl.col("target_id")).name.suffix("_b")),
+                row_a.select(pl.col(FEAT).name.suffix("_a")),
+                row_b.select(pl.col(FEAT).name.suffix("_b")),
+                row_a.select((pl.col("detected")).name.suffix("_a")),
+                row_b.select((pl.col("detected")).name.suffix("_b")),
+                row_a.select(SHARED_FEATURES),
+            ],
+            how = "horizontal"
+        )
+        chunks.append(merged)
+
+    pairs = pl.concat(chunks, how = "vertical").select(cols)
+    return pairs
+
+def load_pairs(path :str = CACHE_PATH, name : str = PAIR_NAME):
+    df = pl.read_csv(path + name, infer_schema_length=None)
+    labels = df.select(["detected_a", "detected_b"])
+
+    feature_list = FEATURE_COLS
+    features = df.select(feature_list)
+    tags = df.select(
+        ["scenario_id", "drop_id", "target_id_a", "target_id_b"]
+    )
+    return tags, labels, features
 
 #-------------------------------3D Positional Error--------------------------------------#
 
@@ -90,5 +158,10 @@ def load_group_split():
 
 #---------------------------Example Usage-------------------------------#
 features = pl.read_csv("data/feature_cache/all_labels_features.csv")
-indep_features = load_indep_features(features)
-indep_features.write_csv("data/feature_cache/indep_features.csv")
+#indep_features = load_indep_features(features)
+#indep_features.write_csv("data/feature_cache/indep_features.csv")
+
+#pairs = process_pair(features)
+#pairs.write_csv("data/feature_cache/pair_features.csv")
+
+tags, labels, features = load_pairs()
