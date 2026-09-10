@@ -137,6 +137,9 @@ def process_pair(df : pl.DataFrame):
 def load_pairs(path :str = CACHE_PATH, name : str = PAIR_NAME):
     df = pl.read_csv(path + name, infer_schema_length=None)
     labels = df.select(["detected_a", "detected_b"])
+    labels = labels.select(
+        (2 * (pl.col("detected_a")) + (pl.col("detected_b"))).alias("score")
+    )
 
     feature_list = FEATURE_COLS
     features = df.select(feature_list)
