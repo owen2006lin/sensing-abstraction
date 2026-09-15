@@ -10,6 +10,7 @@ CACHE_PATH = "data/feature_cache/"
 INDEP_NAME = "indep_features.csv"
 PAIR_NAME = "pair_features.csv"
 ERROR_NAME = "error_features.csv"
+POS_NAME = "pos_features.csv"
 
 MATCH_COLS = [
     "scenario_id",
@@ -33,10 +34,14 @@ def indep_mutual_split(df : pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     non_mutual = df_tagged.filter(pl.col("group_size") == 1).drop("group_size")
 
     return mutual_pairs, non_mutual
-    
 
+def drop_missed(df : pl.DataFrame) -> pl.DataFrame:
+    filtered = df.filter(
+        (pl.col("detected") == 1)
+    )
+    return filtered
 #--------------------------------Independent Classifier---------------------------------#
-def load_indep_features(df : pl.DataFrame) -> pl.DataFrame:
+def process_indep_features(df : pl.DataFrame) -> pl.DataFrame:
     (_ , indep) = indep_mutual_split(df)
     feature_list = [f.value for f in IndepFeature]
     labels = indep.select("detected")
@@ -84,7 +89,7 @@ SHARED_FEATURES = [
 FEAT = [feat.value for feat in PairFeature if feat not in SHARED_FEATURES]
 FEATURE_COLS = [f"{f}_{suffix}" for f in FEAT for suffix in ("a", "b")]
 
-def process_pair(df : pl.DataFrame):
+def process_pair_features(df : pl.DataFrame):
     (pair , _) = indep_mutual_split(df)
     grouped = pair.group_by(MATCH_COLS)    
 
@@ -149,10 +154,33 @@ def load_pairs(path :str = CACHE_PATH, name : str = PAIR_NAME):
     return tags, labels, features
 
 #-------------------------------3D Positional Error--------------------------------------#
+def process_pos_features(df : pl.DataFrame) -> pl.DataFrame:
+    cleaned = drop_missed(df)
+    feature_list = [f.value for f in PosFeature]
+    features = cleaned.select(feature_list)
+
+    labels = cleaned.select(["position_error_3d_m","range_error_m", "rx_azimuth_error_deg","rx_elevation_error_deg"])
 
 
+    tags = cleaned.select(
+        ["scenario_id", "drop_id", "target_id"]
+    )
 
+    return pl.concat([tags, features, labels], how = "horizontal")
 
+def load_pos(path : str = CACHE_PATH, name : str = POS_NAME):
+    df = pl.read_csv(path + name, infer_schema_length=None)
+
+    labels = df.select(["position_error_3d_m","range_error_m", "rx_azimuth_error_deg","rx_elevation_error_deg"])
+
+    feature_list = [f.value for f in PosFeature]
+    features = df.select(feature_list)
+
+    tags = df.select(
+        ["scenario_id", "drop_id", "target_id"]
+    )
+
+    return tags, labels, features
 
 #--------------------------------------API / Usage----------------------------------#
 
@@ -161,10 +189,15 @@ def load_pairs(path :str = CACHE_PATH, name : str = PAIR_NAME):
 
 #---------------------------Example Usage-------------------------------#
 features = pl.read_csv("data/feature_cache/all_labels_features.csv")
-#indep_features = load_indep_features(features)
+#indep_features = process_indep_features(features)
 #indep_features.write_csv("data/feature_cache/indep_features.csv")
 
-#pairs = process_pair(features)
+#pairs = process_pair_features(features)
 #pairs.write_csv("data/feature_cache/pair_features.csv")
 
-tags, labels, features = load_pairs()
+#tags, labels, features = load_pairs()
+
+pos = process_pos_features(features)
+pos.write_csv("data/feature_cache/pos_features.csv")
+
+tags, labels, features = load_pos()
