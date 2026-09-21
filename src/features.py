@@ -75,14 +75,20 @@ class PosFeature(str, Enum):
   ABS_BISTATIC_DOPPLER_HZ = "abs_bistatic_doppler_hz"
   LOG_R = "log_R"
   RX_ELEVATION_DEG = "rx_elevation_deg"
+  RX_AZIMUTH_DEG = "rx_azimuth_deg"
   AZ_OFF_BORESIGHT = "az_off_boresight"
 
 
   # quantization related
+  #U_TRUE = "u_true"
+  #V_TRUE = "v_true"
   FRAC_U = "frac_u"
   FRAC_V = "frac_v"
   ABS_FRAC_U = "abs_frac_u"
   ABS_FRAC_V = "abs_frac_v"
+  #Quantization : testing
+  #SLIP_U = "slip_u"
+  #SLIP_V = "slip_v"
 
   # channel / snr
   N_MPC = "n_mpc"

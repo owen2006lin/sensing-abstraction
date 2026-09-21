@@ -38,15 +38,7 @@ CALLBACKS = [
 
 def train_indep(split = DEFAULT_SPLIT, params = GBM_PARAMS, n_rounds : int = 5000, callbacks = CALLBACKS) -> lgb.Booster:
     [X_train, X_val, y_train, y_val] = split
-    feature_names = features.columns
-    dtrain = lgb.Dataset(X_train, label=y_train.to_numpy(), feature_name=feature_names)
-    dval   = lgb.Dataset(X_val, label=y_val.to_numpy(), reference=dtrain, feature_name=feature_names)
 
-
-    model = lgb.train(params, dtrain, num_boost_round=n_rounds,
-                    valid_sets=[dval], valid_names=["val"],
-                    callbacks=callbacks)
-    return model
 
 
 
