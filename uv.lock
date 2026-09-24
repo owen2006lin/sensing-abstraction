@@ -900,6 +900,7 @@ dependencies = [
     { name = "shap", version = "0.49.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin'" },
     { name = "shap", version = "0.50.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14' and platform_machine == 'x86_64' and sys_platform == 'darwin'" },
     { name = "shap", version = "0.52.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "stats" },
 ]
 
 [package.dev-dependencies]
@@ -918,6 +919,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=25.0.1" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
     { name = "shap", specifier = ">=0.45.0" },
+    { name = "stats", specifier = ">=0.1.2a0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1029,6 +1031,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/d3/f9/b4bce2825b39b5776
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/81/9ef641ff4e12cbcca30e54e72fb0951a2ba195d0cda0ba4100e532d929db/slicer-0.0.8-py3-none-any.whl", hash = "sha256:6c206258543aecd010d497dc2eca9d2805860a0b3758673903456b7df7934dc3", size = 15251, upload-time = "2024-03-09T07:03:07.708Z" },
 ]
+
+[[package]]
+name = "stats"
+version = "0.1.2a0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/43/f2d8d8e2660740ecca9c0fab85a07bc02da27d1fcc5071ee481082888720/stats-0.1.2a.tar.gz", hash = "sha256:854e59fa99f92ce8319c16149ef8e9939dba3e2237bbb0fb6a6094c60155bd4c", size = 127625, upload-time = "2010-12-31T09:02:15.131Z" }
 
 [[package]]
 name = "threadpoolctl"

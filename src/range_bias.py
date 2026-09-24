@@ -90,7 +90,7 @@ def train_write_oof(X,y, tags, params):
     np.savetxt("data/feature_cache/residuals.csv", residuals, delimiter = ",")
     np.savetxt("data/feature_cache/residuals_val.csv", residuals_val, delimiter = ",")
 
-train_write_oof(X,y,tags, GBM_PARAMS)
+#train_write_oof(X,y,tags, GBM_PARAMS)
 
 #==============================Training on raw bias==============================#
 DEFAULT_SPLIT =  train_test_split(X, y, test_size=0.2, random_state=42)
@@ -110,15 +110,10 @@ def train_bias(split = DEFAULT_SPLIT, params = GBM_PARAMS):
 model = lgb.Booster(model_file = "models/position_bias.txt")
 preds = model.predict(X)
 
-'''
-# Plotting some visualizations
-y_arr = np.asarray(y).ravel()
-print(y_arr.std())
-print(np.sqrt(np.mean((oof_predictions-y_arr)**2)))
 
+# Plotting some visualizations
 
 import plotly.graph_objects as go
-residuals = y - oof_predictions
 
 def plot(data, name):
     fig = go.Figure(
@@ -131,8 +126,8 @@ def plot(data, name):
     )
     fig.show()
 
-#plot(y, "actual")
+plot(y, "actual")
 #plot(oof_predictions, "oof predictions")
 #plot(residuals, "residuals")
-#plot(preds, "bias model")
-'''
+plot(preds, "bias model")
+

@@ -187,7 +187,7 @@ def load_pos(path : str = CACHE_PATH, name : str = POS_NAME):
 
 
 
-#---------------------------Example Usage-------------------------------#
+#----------------------------------------Example Usage-------------------------------#
 features = pl.read_csv("data/feature_cache/all_labels_features.csv")
 #indep_features = process_indep_features(features)
 #indep_features.write_csv("data/feature_cache/indep_features.csv")
