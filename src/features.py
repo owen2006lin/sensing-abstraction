@@ -80,15 +80,12 @@ class PosFeature(str, Enum):
 
 
   # quantization related
-  #U_TRUE = "u_true"
-  #V_TRUE = "v_true"
+
   FRAC_U = "frac_u"
   FRAC_V = "frac_v"
   ABS_FRAC_U = "abs_frac_u"
   ABS_FRAC_V = "abs_frac_v"
-  #Quantization : testing
-  #SLIP_U = "slip_u"
-  #SLIP_V = "slip_v"
+
 
   # channel / snr
   N_MPC = "n_mpc"

@@ -38,9 +38,11 @@ labels = range_error.with_columns(
 
 
 #=================================Regime Classifier============================#
+# Severe problems with memorization and miscalibration: instead we'll use 5 fold cross
+# validation
+from scipy.optimize import minimize
+from scipy.special import softmax
 
-
-FEATURES = [f.value for f in PosFeature]
 GBM_PARAMS = {
     "objective": "multiclass",
     "num_class": 6,                 # bulk, sb+, sb-, far+, near, far-  (encode labels as 0..5)
@@ -63,28 +65,118 @@ GBM_PARAMS = {
     'gpu_use_dp': False,
 }
 
-def group_split(X, y, tags, test_size=0.2, seed=42):
-    groups = tags.select(pl.struct(["scenario_id", "drop_id"]).hash()).to_series().to_numpy()
-    gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=seed)
-    train, test = next(gss.split(X, y, groups=groups))
-    return X[train], X[test], y[train], y[test], tags[train], tags[test]
+FEATURES = [f.value for f in PosFeature]
+GROUP_COLS = ["scenario_id", "drop_id"]
+N_FOLDS = 5
+SEED = 0
 
+# Fit bias parameter b_k to fix systemic error in classifier
+# p_k = exp(z_k) / Σ_j exp(z_j)                 by default
+# p_k = exp(z_k + b_k) / Σ_j exp(z_j + b_j)     including bias b_k
+def fit_bias(raw, y):                      # raw: (n, 6) held-out raw scores, y: labels 0..5
+    def nll(b):
+        q = softmax(raw + np.r_[0.0, b], axis=1)
+        return -np.log(q[np.arange(len(y)), y] + 1e-12).mean()
+    return np.r_[0.0, minimize(nll, np.zeros(raw.shape[1] - 1), method="L-BFGS-B").x]
 
-def train_regime(X, y, tags, params=GBM_PARAMS):
-    X_new, X_val, y_new, y_val, tags_new, _ = group_split(X, y, tags)
-    X_train, X_test, y_train, y_test, _, _ = group_split(X_new, y_new, tags_new)
+def apply_bias(raw, b):
+    return softmax(raw + b, axis=1)
 
-    dtrain = lgb.Dataset(X_train, label=y_train.to_numpy(), feature_name=FEATURES)
-    dval   = lgb.Dataset(X_val,   label=y_val.to_numpy(),   reference=dtrain, feature_name=FEATURES)
-
-    model = lgb.train(
-        params, dtrain,
-        valid_sets=[dtrain, dval], valid_names=["train", "val"],
-        callbacks=[lgb.log_evaluation(period=10), lgb.early_stopping(200)],
+def assign_folds(df : pl.DataFrame, n_folds : int = N_FOLDS, seed : int = SEED):
+    folds = (
+        df.select(GROUP_COLS)
+        .unique()
+        .sort(GROUP_COLS)
+        .sample(fraction = 1.0, shuffle = True, seed = seed)
+        .with_columns((pl.int_range(pl.len()) % n_folds).alias("fold"))
     )
-    return model, (X_test, y_test)
+    return df.join(folds, on = GROUP_COLS, how = "left", maintain_order = "left")
 
-model = train_regime(features, labels, tags)
+
+def predict_out_of_fold(features : pl.DataFrame, labels : pl.DataFrame, tags : pl.DataFrame, params : dict):
+    X = features.to_numpy()
+    y = labels.to_numpy()
+    tags = assign_folds(tags)
+    fold = tags["fold"].to_numpy()
+    models = []
+    n_class = params.get("num_class", 1)
+    out_of_fold = np.full((X.shape[0], n_class), np.nan)
+
+    for k in range(N_FOLDS): 
+        print(f"Cross fitting fold {k}")
+        (train, valid) = (fold!= k, fold == k)  
+        dtrain = lgb.Dataset(X[train], label = y[train], feature_name = FEATURES)
+        dvalid = lgb.Dataset(X[valid], label = y[valid], feature_name = FEATURES, reference = dtrain)
+        model = lgb.train(params, dtrain, 
+                          valid_sets = [dvalid],
+                          valid_names = ["valid"],
+                          callbacks=[lgb.log_evaluation(period=50),
+                                     lgb.early_stopping(stopping_rounds=100, verbose=True)])
+        print(model.best_iteration)
+        out_of_fold[valid] = model.predict(X[valid], raw_score = True)
+        models.append(model)
+
+    #==============Cross fit bias, fit on 4 folds then apply to 5th==============#
+    y_int = y.ravel().astype(int)
+    oof_cal = np.full_like(out_of_fold, np.nan)
+    biases = []
+    for k in range(N_FOLDS):
+        (train, valid) = (fold != k, fold == k)
+        b_k = fit_bias(out_of_fold[train], y_int[train])
+        oof_cal[valid] = apply_bias(out_of_fold[valid], b_k)
+        biases.append(b_k)
+        print(f"fold {k} bias: {np.round(b_k, 3)}")
+
+    b_final = fit_bias(out_of_fold, y_int)    #fit on all OOF rows
+    return out_of_fold, oof_cal, b_final, models
+
+[X_train, X_val, y_train, y_val] =  train_test_split(features, labels, test_size=0.2, random_state=42)
+[tags_train, tags_val] = train_test_split(tags, test_size = 0.2, random_state= 42)
+
+oof_preds, oof_cal, b_final, models = predict_out_of_fold(X_train, y_train, tags_train, GBM_PARAMS)
+#np.savetxt("data/feature_cache/oof_class_preds.csv", oof_cal)
+print(b_final)
+
+i = 0
+for model in models:
+    model.save_model(f"models/regime_class_{i}.txt")
+    i+=1
+
+#Turns out, b_final = [ 0.          0.17261316  0.1903196  -0.0079811   0.4821967   0.09235376]
+#b_final = [ 0. ,0.17261316,  0.1903196,  -0.0079811,   0.4821967,   0.09235376]
+
+def predict_regime(features):
+    probs_outputs = 0
+    for i in range(N_FOLDS):
+        model = lgb.Booster(model_file=f"models/regime_class_{i}.txt")
+        preds = model.predict(features, raw_score = True)
+        prob = apply_bias(preds, b_final)
+        probs_outputs += prob
+
+    probs_outputs/=N_FOLDS
+    return probs_outputs
+
+
+probs = predict_regime(X_val)
+
+
+CLASS_NAMES = ["bulk", "sb+", "sb-", "far+", "near", "far-"]   # must match your 0..5 label encoding
+
+def bias_table(y, probs, raw_oof=None, b=None, class_names=CLASS_NAMES):
+    y = np.asarray(y).ravel().astype(int)
+    k = probs.shape[1]
+    cols = {"class": class_names[:k]}
+    if b is not None:
+        cols["offset_b_k"] = np.round(np.asarray(b, float), 3)
+    if raw_oof is not None:
+        cols["pred_before_%"] = 100 * softmax(raw_oof, axis=1).mean(0)
+    cols["pred_after_%"] = 100 * probs.mean(0)
+    cols["observed_%"] = 100 * np.bincount(y, minlength=k) / len(y)
+    cols["after/obs"] = cols["pred_after_%"] / cols["observed_%"]
+    with pl.Config(tbl_rows=-1, float_precision=4):
+        print(pl.DataFrame(cols))
+
+bias_table(y_val, probs)
 
 
 #=================================Fit Bulk Region============================#
