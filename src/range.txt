@@ -33,7 +33,7 @@ ALSO: feed slip value into classifier, seems to be some nontrivial correlation
 
 How to train:
 
-Use following fixed labels for range error:
+Use following fixed labels for range error:  x
 
 bulk        :           -0.52m - +0.82m
 sideband +  :           1.4m - 1.85m
@@ -42,15 +42,15 @@ far +       :           >   .85m
 far -       :           < -2.25m
 near        :           anything else
 
-Fit the bulk(?)
+Fit the bulk(?)   x
+ 
+Train gbm to classify   x
 
-Train gbm to classify
+check calibration per class (?)   x
 
-check calibration per class (?)
+Build distribution pools    
 
-Build distribution pools
-
-validate on held out drops
+validate on held out drops   
 
 
 

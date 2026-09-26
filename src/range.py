@@ -7,34 +7,18 @@ from sklearn.model_selection import train_test_split
 import random
 
 
-tags, errors, features = load_pos()
-range_error = errors.select("range_error_m")
-
 '''
 Labeling : 6 classes, bulk, sb+/-, far+/-, near
 
 Thresholds are below:
-(1)bulk        :           -0.52m - +0.82m
-(2)sideband +  :           1.4m - 1.85m
-(3)sideband -  :           -2.25m - -1.55m
-(4)far +       :           >  1.85m 
-(5)far -       :           < -2.25m
-(6)near        :           anything else
+(0)bulk        :           -0.52m - +0.82m
+(1)sideband +  :           1.4m - 1.85m
+(2)sideband -  :           -2.25m - -1.55m
+(3)far +       :           >  1.85m 
+(4)far -       :           < -2.25m
+(5)near        :           anything else
 
 '''
-c = pl.col("range_error_m")
-
-labels = range_error.with_columns(
-    pl.when(c.is_between(-0.52, 0.82)).then(0)
-    .when(c.is_between(1.4,1.85)).then(1)
-    .when(c.is_between(-2.25, -1.55)).then(2)
-    .when(c > 1.85).then(3)
-    .when(c < -2.25).then(4)
-    .otherwise(5)
-    .alias("region")
-).select("region")
-
-
 
 
 #=================================Regime Classifier============================#
@@ -45,7 +29,7 @@ from scipy.special import softmax
 
 GBM_PARAMS = {
     "objective": "multiclass",
-    "num_class": 6,                 # bulk, sb+, sb-, far+, near, far-  (encode labels as 0..5)
+    "num_class": 6,                 # bulk, sb+, sb-, far+, far-, near  (encode labels as 0..5)
     "metric": "multi_logloss",
     "n_estimators": 500,
     "learning_rate": 0.05,
@@ -130,37 +114,35 @@ def predict_out_of_fold(features : pl.DataFrame, labels : pl.DataFrame, tags : p
     b_final = fit_bias(out_of_fold, y_int)    #fit on all OOF rows
     return out_of_fold, oof_cal, b_final, models
 
-[X_train, X_val, y_train, y_val] =  train_test_split(features, labels, test_size=0.2, random_state=42)
-[tags_train, tags_val] = train_test_split(tags, test_size = 0.2, random_state= 42)
 
-oof_preds, oof_cal, b_final, models = predict_out_of_fold(X_train, y_train, tags_train, GBM_PARAMS)
+#oof_preds, oof_cal, b_final, models = predict_out_of_fold(features, labels, tags, GBM_PARAMS)
 #np.savetxt("data/feature_cache/oof_class_preds.csv", oof_cal)
-print(b_final)
+#print(b_final)
 
-i = 0
-for model in models:
-    model.save_model(f"models/regime_class_{i}.txt")
-    i+=1
+#i = 0
+#for model in models:
+#    model.save_model(f"models/regime_class_{i}.txt")
+#    i+=1
 
-#Turns out, b_final = [ 0.          0.17261316  0.1903196  -0.0079811   0.4821967   0.09235376]
+#Turns out, b_final was = [ 0.          0.17261316  0.1903196  -0.0079811   0.4821967   0.09235376]
 #b_final = [ 0. ,0.17261316,  0.1903196,  -0.0079811,   0.4821967,   0.09235376]
 
-def predict_regime(features):
+def predict_regime(features, bias):
     probs_outputs = 0
     for i in range(N_FOLDS):
         model = lgb.Booster(model_file=f"models/regime_class_{i}.txt")
         preds = model.predict(features, raw_score = True)
-        prob = apply_bias(preds, b_final)
+        prob = apply_bias(preds, bias)
         probs_outputs += prob
 
     probs_outputs/=N_FOLDS
     return probs_outputs
 
 
-probs = predict_regime(X_val)
+#probs = predict_regime(features)
 
 
-CLASS_NAMES = ["bulk", "sb+", "sb-", "far+", "near", "far-"]   # must match your 0..5 label encoding
+CLASS_NAMES = ["bulk", "sb+", "sb-", "far+", "far-", "near"]   # must match your 0..5 label encoding
 
 def bias_table(y, probs, raw_oof=None, b=None, class_names=CLASS_NAMES):
     y = np.asarray(y).ravel().astype(int)
@@ -176,7 +158,7 @@ def bias_table(y, probs, raw_oof=None, b=None, class_names=CLASS_NAMES):
     with pl.Config(tbl_rows=-1, float_precision=4):
         print(pl.DataFrame(cols))
 
-bias_table(y_val, probs)
+#bias_table(labels, probs)
 
 
 #=================================Fit Bulk Region============================#
@@ -194,11 +176,8 @@ LOW = -0.52
 HIGH = 0.82
 mid = (LOW + HIGH) / 2
 
-def fit_bulk(features, labels, print_stats = False):
-    df = pl.concat([features, labels], how = "horizontal")
-    bulk = df.filter(
-        pl.col("region") == "bulk"
-    )
+def fit_bulk(bulk, print_stats = False):
+
     X = bulk.select("bistatic_range_m")
     y = bulk["range_error_m"]
 
@@ -249,8 +228,109 @@ def sample_bulk(model, bistatic_range, distribution):
     return p
 
 
+#====================================Distribution Pools===============================#
 
-#======================================USAGE==============================#
+regions = ["sideband+", "sideband-", "far+", "far-", "near"]
+def build_distributions(features, labels, regions):
+    df = pl.concat([features, labels], how = "horizontal")
+    distributions = []
+    for region in regions:
+        distr = df.filter(
+            pl.col("region_txt") == region
+        )
+        if region == "far+":
+            distr = distr.with_columns(
+                pl.col("nn_norm_range_sep")
+                .cast(pl.Float64)
+                .fill_null(float("inf"))
+                .qcut(5, labels=["1", "2", "3", "4", "5"], allow_duplicates=True)
+                .cast(pl.String)
+                .cast(pl.Int8)
+                .alias("quintile"))
+        distributions.append(distr)
+    return distributions
+
+#[sb_plus, sb_minus, far_plus, far_minus, near] = build_distributions(features, labels, regions)
+
+def jitter(error, type):
+    rng = np.random.default_rng()
+    match type:
+        #sideband+
+        case 1:
+            bounds = [1.4, 1.85]
+            jitter = rng.uniform(low = -0.03, high = 0.03)
+            val = error + jitter
+            if val >= bounds[0] and val <= bounds[1]:
+                return val
+            else: return error - jitter
+        #sideband-
+        case 2:
+            bounds = [-2.25, -1.55]
+            jitter = rng.uniform(low = -0.06, high = 0.06)
+            val = error + jitter
+            if val >= bounds[0] and val <= bounds[1]:
+                return val
+            else: return error - jitter
+        #far+
+        case 3:
+            bounds = [1.85]
+            jitter = rng.uniform(low = -0.1, high = 0.1)
+            val = error + jitter
+            if val >= bounds[0]:
+                return val
+            else: return error - jitter
+        #far-
+        case 4:
+            bounds = [-2.25]
+            jitter = rng.uniform(low = -0.15, high = 0.15)
+            val = error + jitter
+            if val <= bounds[0]:
+                return val
+            else: return error - jitter
+        #near
+        case 5:
+            upper = [0.82, 1.4]
+            lower = [-1.55, -0.52]
+            jitter = rng.uniform(low = -0.03, high = 0.03)
+            val = error + jitter
+
+            if error >= upper[0]:
+                if val <= 1.4:
+                    return val
+                else: return error - jitter
+            else:
+                if val >= -1.55:
+                    return val
+                else: return error - jitter
+
+# Expecting 1,2,3,4,5 -> 0 is bulk which shouldn't be here
+# data should be with class, nn_norm_range_sep -> binning needed for far+ since high correlation
+def sample_non_bulk(data, distributions):
+    ret = []
+    for type, nn_dist in data:
+        distr = distributions[type - 1]
+        # Far+
+        if type == 3:
+            breaks = [distr.get_column("nn_norm_range_sep").quantile(p) for p in (0.2, 0.4, 0.6, 0.8)]
+            q = 1 + sum(nn_dist > b for b in breaks)
+            quintile_df = distr.filter(pl.col("quintile") == q)
+
+            error = random.choice(quintile_df["range_error_m"].to_numpy().ravel())
+        else:
+            error = random.choice(distr["range_error_m"].to_numpy().ravel())
+        error = jitter(error, type)
+        ret.append(error)
+    return ret
 
 
+
+#==================================Further Sampling================================#
+
+def sample_class(probs):
+    preds = []
+    for p in probs:
+        #[p_bulk, p_sb_plus, p_sb_minus, p_far_plus, p_far_minus, p_near] = p
+        idx = random.choices(range(len(p)), weights = p, k=1)[0]
+        preds.append(idx)
+    return  pl.Series("regime",preds)
 
