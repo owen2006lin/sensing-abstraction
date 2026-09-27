@@ -92,10 +92,29 @@ print(len(bulk_outputs))
 
 x = np.concatenate([non_bulk_preds, bulk_outputs.to_numpy().ravel()])
 import numpy as np
-import plotly.express as px
+import plotly.graph_objects as go
 
-fig = px.histogram(x=x, nbins=50)
-fig.show()
+fig = go.Figure()
 
-fig = px.histogram(x=y["range_error_m"].to_numpy().ravel(), nbins=50)
+fig.add_trace(go.Histogram(
+    x=x,
+    nbinsx=100,
+    name="x",
+    opacity=0.6
+))
+
+fig.add_trace(go.Histogram(
+    x=y["range_error_m"].to_numpy().ravel(),
+    nbinsx=100,
+    name="range_error_m",
+    opacity=0.6
+))
+
+fig.update_layout(
+    barmode="overlay",
+    xaxis_title="value",
+    yaxis_title="count",
+    legend_title="series"
+)
+
 fig.show()

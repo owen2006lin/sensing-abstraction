@@ -3,6 +3,7 @@ import polars as pl
 import numpy as np
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
 
 '''
 First: computes angular error through:
@@ -21,48 +22,28 @@ sample slip_u, slip_v binned by frac (high dependence on these guys
 convert u_est, v_est -> az_est, el_est
 subtract
 
-
-Next range error:
-
-ml model to predict the bias (average range error)
-Two parts:
-    (1) Train on entire data set normally, this will be our "mean error"
-    (2) Use 5 fold grouped cross validation and save the residuals. We 
-    use these to train standard deviation
-
-PROBLEM!!!
-Too many extreme values that are hijacking training, since
-close ish extreme predictions > many (relatively bad) bulk predictions 
-(Simpson's paradox?)
-
-But looks like downstream, itsfine?
-
-however too noisy so train separate model to find the 
-standard deviation
-
-aggregate all z-scores (find distribution of range errors)
-randomly sample a z-score to scale the std dev by
-
-
-
 '''
 
 tags, labels, features = load_pos()
-
+features.write_csv("slip_test.csv")
 
 #------------------------------------------Angular Error--------------------------------------#
 # (No sampling for now)
 from src.feature_builder import *
 NGRID = 32.0
 AZ0 = 30.0
-'''
+
 sim = features.select(
     pl.col("u_true"),
     pl.col("v_true"),
     ((NGRID * pl.col("u_true") - pl.col("frac_u"))/ NGRID).alias("u_est"),
     ((NGRID * pl.col("v_true") - pl.col("frac_v"))/ NGRID).alias("v_est"),
     pl.col("rx_azimuth_deg"),
-    pl.col("rx_elevation_deg")
+    pl.col("rx_elevation_deg"),
+    pl.col("slip_v"),
+    pl.col("slip_u"),
+    pl.col("frac_u"),
+    pl.col("frac_v")
 )
 
 
@@ -76,155 +57,70 @@ sim = sim.with_columns(
     (pl.col("az_est") - pl.col("rx_azimuth_deg")).alias("az_err"),
     (pl.col("el_est") - pl.col("rx_elevation_deg")).alias("el_err"),
 )
-'''
+#=================================Fitting Slippage Sampler=======================#
+def slip_stats(df: pl.DataFrame, max_mag: int = 4) -> dict:
+    """p_toward and mag_dist for u, v, and pooled (u+v stacked, as in the fit script)."""
+    long = pl.concat([
+        df.select(axis=pl.lit(ax), slip=pl.col(f"slip_{ax}"), frac=pl.col(f"frac_{ax}"))
+        for ax in ("u", "v")
+    ])
+    slips = long.filter(pl.col("slip") != 0)
 
+    def stats(s: pl.DataFrame) -> dict:
+        ones = s.filter(pl.col("slip").abs() == 1)
+        p_toward = ones.select((pl.col("slip").sign() == pl.col("frac").sign()).mean()).item()
+        mag = (s.group_by(mag=pl.col("slip").abs().clip(upper_bound=max_mag))
+                 .len().sort("mag")
+                 .with_columns(p=pl.col("len") / pl.col("len").sum()))
+        return {"n_slips": s.height, "p_toward": p_toward,
+                "mag_dist": dict(zip(mag["mag"].to_list(), mag["p"].to_list()))}
 
+    out = {ax: stats(slips.filter(pl.col("axis") == ax)) for ax in ("u", "v")}
+    out["pooled"] = stats(slips)
+    return out
 
+def print_slip_stats(stats: dict, max_mag: int = 4) -> None:
+    mags = sorted({int(m) for s in stats.values() for m in s["mag_dist"]})
+    labels = [f"{m}+" if m == max_mag else str(m) for m in mags]
+    print(f"{'axis':<8}{'n_slips':>8}{'p_toward':>10}  " + "".join(f"{'|' + l + '|':>8}" for l in labels))
+    for ax, s in stats.items():
+        dist = {int(k): v for k, v in s["mag_dist"].items()}
+        p = s["p_toward"]
+        p_str = f"{p:.3f}" if p is not None else "-"
+        print(f"{ax:<8}{s['n_slips']:>8}{p_str:>10}  " + "".join(f"{dist.get(m, 0):>8.3f}" for m in mags))
 
-#-----------------------Predicting average error-----------------------#
-'''
-features = features.drop(
-    "u_true",
-    "v_true",
-    "slip_u",
-    "slip_v"
-)
-'''
-
-# 5 fold grouped cross validation : fitting exactly to error overfits and makes
-# the residuals too small
-
-FEATURES = [f.value for f in PosFeature]
-NUM_ROUNDS = 500  
-
-range_error = labels["range_error_m"]
-DEFAULT_SPLIT =  train_test_split(features, range_error, test_size=0.2, random_state=42)
-[X_train, X_val, y_train, y_val] = DEFAULT_SPLIT
-GBM_PARAMS = {
-    "objective": "regression",
-    "metric" : "rmse",
-    "n_estimators" : 200,
-    "learning_rate": 0.03,
-    "num_leaves": 63,
-    "min_data_in_leaf": 50,
-    "feature_fraction": 0.65,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 1,
-    "lambda_l2": 1.0,
-    "verbosity": -1,
-    "seed": 42,
-
-    #Use cuda to speed up (can ignore if on CPU)
-    'device': 'cuda',       
-    'gpu_use_dp': False,
-}
-
-
-def train_bias(split = DEFAULT_SPLIT, params = GBM_PARAMS):
-    [X_train, X_val, y_train, y_val] = split
-    feature_names = features.columns
-    dtrain = lgb.Dataset(X_train, label=y_train.to_numpy(), feature_name=feature_names)
-    dval   = lgb.Dataset(X_val, label=y_val.to_numpy(), reference=dtrain, feature_name=feature_names)
-
-
-    model = lgb.train(params, dtrain,
-                    valid_sets=[dval], valid_names=["val"],
-                    callbacks=[lgb.log_evaluation(period = 10)])
-    return model
-
-
-#model = train_bias()
-#model.save_model("models/position_bias.txt")
-model = lgb.Booster(model_file = "models/position_bias.txt")
-from sklearn.metrics import r2_score
-y_pred = model.predict(X_val)
-r2 = r2_score(y_val, y_pred)
-
-y_val = y_val.to_numpy()
-
-print(f"R^2 Score : {r2}")
-print(np.std(y_pred) / np.std(y_val)) 
-print(np.corrcoef(y_pred, y_val)[0,1])
-print(np.mean(y_pred) - np.mean(y_val))
-
-GROUP_COLS = ["scenario_id", "drop_id"]
-N_FOLDS = 5
-SEED = 0
-# Assigns whole drops to folds, prevents cross drop leakage across train-test
-
-def assign_folds(df : pl.DataFrame, n_folds : int = N_FOLDS, seed : int = SEED):
-    folds = (
-        df.select(GROUP_COLS)
-        .unique()
-        .sort(GROUP_COLS)
-        .sample(fraction = 1.0, shuffle = True, seed = seed)
-        .with_columns((pl.int_range(pl.len()) % n_folds).alias("fold"))
-    )
-    return df.join(folds, on = GROUP_COLS, how = "left")
-
-def predict_out_of_fold(features : pl.DataFrame, labels : pl.DataFrame, tags : pl.DataFrame, params : dict):
-    X = features.to_numpy()
-    y = labels.to_numpy()
-    fold = tags["fold"].to_numpy()
-
-    out_of_fold = np.full(X.shape[0], np.nan)
-
-    for k in range(N_FOLDS): 
-        print(f"Cross fitting fold {k}")
-        (train, valid) = (fold!= k, fold == k)  
-        dtrain = lgb.Dataset(X[train], label = y[train], feature_name = FEATURES)
-        dvalid = lgb.Dataset(X[valid], label = y[valid], feature_name = FEATURES, reference = dtrain)
-        model = lgb.train(params, dtrain, 
-                          valid_sets = [dvalid],
-                          valid_names = ["valid"],
-                          callbacks=[lgb.log_evaluation(period=50)])
-        out_of_fold[valid] = model.predict(X[valid])
-    return out_of_fold
-
-
-
-tags = assign_folds(tags)
-
-#print(features.columns)
-#print(FEATURES)
-#oof = predict_out_of_fold(features, labels["range_error_m"], tags, GBM_PARAMS)
-#np.savetxt("data/feature_cache/oof_outputs.csv", oof, delimiter = ",")
-oof_predictions = np.genfromtxt("data/feature_cache/oof_outputs.csv")
-real_errors = labels.select("range_error_m")
-real_errors.write_csv("data/feature_cache/real_range_error.csv")
-
-
-#----------------------Training on standard deviation--------------------#
-residuals = labels.select(
-    ((pl.col("range_error_m") - oof_predictions)).alias("residual_squared")
-)
-
-import plotly.graph_objects as go
-df = residuals.select(pl.col("residual_squared"))
-
-fig = go.Figure(
-    go.Histogram(x=df["residual_squared"], nbinsx=100)
-)
-fig.update_layout(
-    xaxis_title="residual_squared",
-    yaxis_title="count",
-    bargap=0.1,          # px adds a small gap between bars; drop for touching bars
-)
-fig.show()
 
 '''
-print(real_errors.to_numpy().ravel())
-fig1 = go.Figure()
-bins = dict(start=-100, end=100, size=0.04)
-fig1.add_trace(go.Histogram(x=y_pred, name="model predictions"))
-fig1.add_trace(go.Histogram(x=y_val, name="true error"))
+axis     n_slips  p_toward       |1|     |2|     |3|    |4+|
+u            679     0.921     0.934   0.043   0.015   0.009
+v            584     0.951     0.935   0.053   0.007   0.005
+pooled      1263     0.935     0.934   0.048   0.011   0.007
 
-fig1.update_layout(
-    barmode="overlay",   
-    xaxis_title="range error",
-    yaxis_title="count",
-    bargap=0.1,
-)
-fig1.update_traces(opacity=0.6)   
-fig1.show()
+Reasonable to assume u,v slippage are largely identical -> shared model to predict slipping
 '''
+
+EDGE_MIN = 1e-3  
+
+slip_label_u = sim.select(pl.col("slip_u").alias("slip"))
+slip_features_u = (features.select(["rss_max", "nn_norm_range_sep", "abs_frac_u"]) 
+                            .rename({"abs_frac_u" : "abs_frac"})
+                    )
+
+
+slip_label_v = sim.select(pl.col("slip_v").alias("slip"))
+slip_features_v = (features.
+                            select(["rss_max", "nn_norm_range_sep","abs_frac_v"])
+                            .rename({"abs_frac_v" : "abs_frac"})
+                    )
+
+slip_labels = slip_label_u.vstack(slip_label_v)
+slip_features = slip_features_u.vstack(slip_features_v)
+
+print(slip_labels)
+print(slip_features)    
+
+
+
+
+
+
