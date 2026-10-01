@@ -11,6 +11,7 @@ INDEP_NAME = "indep_features.csv"
 PAIR_NAME = "pair_features.csv"
 ERROR_NAME = "error_features.csv"
 POS_NAME = "pos_features.csv"
+CLASS_NAME = "full_class_features.csv"
 
 MATCH_COLS = [
     "scenario_id",
@@ -27,11 +28,13 @@ MATCH_COLS = [
 
 
 
-def group_split(tags, labels, features):
+def group_split(tags, labels, features, return_tags = False):
     groups = tags.select(pl.struct(["scenario_id", "drop_id"]).hash()).to_series().to_numpy()
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_idx, val_idx = next(gss.split(features, labels, groups=groups))
     gss_split = [features[train_idx], features[val_idx], labels[train_idx], labels[val_idx]]
+    if return_tags:
+        gss_split = [features[train_idx], features[val_idx], labels[train_idx], labels[val_idx], tags[train_idx], tags[val_idx]]
     return gss_split
 
     
@@ -54,9 +57,9 @@ def load_indep(path :str = CACHE_PATH, name : str = INDEP_NAME) -> tuple[pl.Data
 
 
 SHARED_FEATURES = [
-    PosFeature.N_TARGETS.value,
-    PosFeature.NN_NORM_RANGE_SEP.value,
-    PosFeature.NN_NORM_ANG_SEP.value
+    PairFeature.N_TARGETS.value,
+    PairFeature.NN_NORM_RANGE_SEP.value,
+    PairFeature.NN_NORM_ANG_SEP.value
 ]
 FEAT = [feat.value for feat in PairFeature if feat not in SHARED_FEATURES]
 FEATURE_COLS = [f"{f}_{suffix}" for f in FEAT for suffix in ("a", "b")]
@@ -68,7 +71,7 @@ def load_pairs(path :str = CACHE_PATH, name : str = PAIR_NAME):
         (2 * (pl.col("detected_a")) + (pl.col("detected_b"))).alias("score")
     )
 
-    feature_list = FEATURE_COLS
+    feature_list = FEATURE_COLS + SHARED_FEATURES
     features = df.select(feature_list)
     tags = df.select(
         ["scenario_id", "drop_id", "target_id_a", "target_id_b"]
@@ -92,5 +95,39 @@ def load_pos(path : str = CACHE_PATH, name : str = POS_NAME):
 
     return tags, labels, features
 
+#======================================Full Classifier===========================================#
+# Loading for full classifier pipeline
+def load_class(path : str = CACHE_PATH, name : str = CLASS_NAME):
+    df = pl.read_csv(path + name, infer_schema_length=None)
+    
+    labels = df.select("detected")
+    features_indep = [f.value for f in IndepFeature]
+    features_pair = [f.value for f in PairFeature]
+    feature_list = list(set(features_indep) | set(features_pair))
+
+    features = df.select(feature_list)
+    tags = df.select(
+        ["scenario_id", "drop_id", "target_id"]
+    )
+    return tags, labels, features
 
 
+def split_indep(df, feature_list):
+    tags = df.select(["scenario_id", "drop_id", "target_id"])
+    labels = df.select("detected")
+    features = df.select(feature_list)
+
+    return tags, labels, features
+
+def split_pairs(df, feature_list):
+    tags = df.select(
+        ["scenario_id", "drop_id", "target_id_a", "target_id_b"]
+    )
+    labels =  (df
+                .select(["detected_a", "detected_b"])
+                .select((2 * (pl.col("detected_a")) + (pl.col("detected_b")))
+                .alias("score")
+                ))
+    features = df.select(feature_list)  
+
+    return tags, labels, features

@@ -17,9 +17,9 @@ MATCH_COLS = [
 
 
 
-def indep_mutual_split(df : pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+def indep_mutual_split(df : pl.DataFrame, match_cols = MATCH_COLS) -> tuple[pl.DataFrame, pl.DataFrame]:
     df_tagged = df.with_columns(
-        group_size = pl.len().over(MATCH_COLS)
+        group_size = pl.len().over(match_cols)
     )
 
     mutual_pairs = df_tagged.filter(pl.col("group_size") == 2).drop("group_size")
@@ -46,20 +46,19 @@ SHARED_FEATURES = [
 
 FEAT = [feat.value for feat in PairFeature if feat not in SHARED_FEATURES]
 FEATURE_COLS = [f"{f}_{suffix}" for f in FEAT for suffix in ("a", "b")]
-def process_pair_features(df: pl.DataFrame) -> pl.DataFrame:
-    pair, _ = indep_mutual_split(df)
+def process_pair_features(df: pl.DataFrame, match_cols = MATCH_COLS) -> pl.DataFrame:
+    pair, _ = indep_mutual_split(df, match_cols)
 
     shared_tags = ["scenario_id", "drop_id"]
     per_target = ["target_id", "detected", *FEAT]
-    left_keys = list(dict.fromkeys(MATCH_COLS + shared_tags))  # avoid dup cols
+    left_keys = list(dict.fromkeys(match_cols + shared_tags))  # avoid dup cols
 
     a = pair.select(
-        *left_keys,
+        *dict.fromkeys([*left_keys, *SHARED_FEATURES]),
         pl.col(per_target).name.suffix("_a"),
-        *SHARED_FEATURES,  # taken from the "a" row, as in your loop
     )
     b = pair.select(
-        *MATCH_COLS,
+        *match_cols,
         pl.col(per_target).name.suffix("_b"),
     )
 
@@ -67,12 +66,50 @@ def process_pair_features(df: pl.DataFrame) -> pl.DataFrame:
             + SHARED_FEATURES + ["detected_a", "detected_b"])
 
     return (
-        a.join(b, on=MATCH_COLS)
+        a.join(b, on=match_cols)
          .filter(pl.col("target_id_a") != pl.col("target_id_b"))
          .select(cols)
     )
 
 
+def process_pair_inference(df : pl.DataFrame, match_cols = MATCH_COLS):
+    shared_tags = ["scenario_id", "drop_id"]
+    per_target = ["target_id", *FEAT]
+    left_keys = list(dict.fromkeys(match_cols + shared_tags))  # avoid dup cols
+
+    a = df.select(
+        *dict.fromkeys([*left_keys, *SHARED_FEATURES]),
+        pl.col(per_target).name.suffix("_a"),
+    )
+    b = df.select(
+        *match_cols,
+        pl.col(per_target).name.suffix("_b"),
+    )
+
+    cols = ( FEATURE_COLS + SHARED_FEATURES)
+
+    return (
+        a.join(b, on=match_cols)
+            .filter(pl.col("target_id_a") < pl.col("target_id_b"))
+            .select(cols)
+    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#=======================================Positional Error=================================#
 def drop_missed(df : pl.DataFrame) -> pl.DataFrame:
     filtered = df.filter(
         (pl.col("detected") == 1)
@@ -92,3 +129,26 @@ def process_pos_features(df : pl.DataFrame) -> pl.DataFrame:
     )
 
     return pl.concat([tags, features, labels], how = "horizontal")
+
+
+
+
+
+def process_classifier_features(df : pl.DataFrame) -> pl.DataFrame:
+    labels = df.select("detected")
+    tags = df.select(["scenario_id", "drop_id", "target_id"])
+    
+    features_indep = [f.value for f in IndepFeature]
+    features_pair = [f.value for f in PairFeature]
+
+    selected_features = list(set(features_indep) | set(features_pair))
+    df_selected = df[selected_features]
+    df_selected = df_selected.with_columns(labels)
+
+    df_selected = df_selected.with_columns(tags)
+    
+    return df_selected
+
+
+
+

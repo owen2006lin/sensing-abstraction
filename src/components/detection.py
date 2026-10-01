@@ -1,7 +1,10 @@
-from src.data.load import load_indep, load_pairs, group_split, tt_split
+from src.data.load import load_indep, load_pairs, group_split, tt_split, FEATURE_COLS, SHARED_FEATURES
 from src.components.base import Component
+from src.feature_building.feature_selector import indep_mutual_split, process_pair_features, process_pair_inference
 import lightgbm as lgb
 import numpy as np
+import polars as pl
+from src.data.features import IndepFeature, PairFeature
 
 INDEP_PARAMS = {
     "objective": "binary",
@@ -40,6 +43,16 @@ PAIR_PARAMS = {
     'gpu_use_dp': False,
 }
 
+MATCH_COLS = [
+    "scenario_id",
+    "drop_id",
+    "nn_norm_range_sep"
+]
+
+CALLBACKS = [
+    # stops after 200 rounds of no improvement
+    lgb.early_stopping(stopping_rounds = 200), 
+    lgb.log_evaluation(period = 20)]
 
 #====================================Independent Classifier=======================#
 
@@ -77,20 +90,22 @@ class IndepClassifier(Component):
 
     def sample(self, X, rng):
         X = np.asarray(X)
-        return (rng.uniform(size = X.shape) < X).astype(int)
+        samples = (rng.uniform(size = X.shape) < X).astype(int)
+        df = pl.DataFrame(samples, schema = ["detected"])
+        return df.with_columns(pl.col("detected").cast(pl.Boolean))
 
 tags, labels, features = load_indep()
 [X, X_val, y, y_val] = group_split(tags, labels, features)
 
 #classifier = IndepClassifier()
-#classifier.fit(X, y)
+#classifier.fit(X, y, callbacks=CALLBACKS)
 #classifier.save("models/indep_classifier.joblib")
 
-classifier = IndepClassifier.load("models/indep_classifier.joblib")
-preds = classifier.predict_proba(X_val)
-print(preds)
-rng = np.random.default_rng(seed = 42)
-print(classifier.sample(preds, rng))
+#classifier = IndepClassifier.load("models/indep_classifier.joblib")
+#preds = classifier.predict_proba(X_val)
+#print(preds)
+#rng = np.random.default_rng(seed = 42)
+#print(classifier.sample(preds, rng))
 
 #====================================Pair Classifier=======================#
 class PairClassifier(Component):
@@ -128,20 +143,120 @@ class PairClassifier(Component):
     def sample(self, X, rng):
         X = np.asarray(X)
         sampled_indices = [rng.choice(len(row), p = row) for row in X]
-        return sampled_indices
+        df = pl.DataFrame(sampled_indices, schema = ["score"])
+        df = df.with_columns(
+            pl.col("score").is_in([1,3]).alias("a_detected"),
+            pl.col("score").is_in([2,3]).alias("b_detected")
+        )
+        return df.select(["a_detected", "b_detected"])
 
-CALLBACKS = [
-    # stops after 200 rounds of no improvement
-    lgb.early_stopping(stopping_rounds = 200), 
-    lgb.log_evaluation(period = 20)]
-
+'''
 tags, labels, features = load_pairs()
 [X, X_val, y, y_val] = group_split(tags, labels, features)
-#pair_classifier = PairClassifier()
-#pair_classifier.fit(X,y, callbacks=CALLBACKS)
-#pair_classifier.save("models/pair_classifier.joblib")
+pair_classifier = PairClassifier()
+pair_classifier.fit(X,y,X_val,y_val, callbacks=CALLBACKS)
+pair_classifier.save("models/pair_classifier.joblib")
 pair_classifier = PairClassifier.load("models/pair_classifier.joblib")
 preds = pair_classifier.predict_proba(X_val)
-samples = pair_classifier.sample(preds, rng)
+#samples = pair_classifier.sample(preds, rng)
 
-print(X_val)
+#print(samples)
+'''
+
+
+#======================================Full Classifier=======================#
+from src.data.load import split_indep, split_pairs, load_class
+
+
+
+
+class FullClassifier(Component):
+    def __init__(self, models = None, params = [INDEP_PARAMS, PAIR_PARAMS], callbacks = [CALLBACKS,CALLBACKS]):
+        if not models:
+            self.indep_model = None
+            self.pair_model = None
+        else:
+            self.indep_model = models[0]
+            self.pair_model = models[1]
+
+        self.indep_callbacks = callbacks[0]
+        self.pair_callbacks = callbacks[1]
+        self.indep_params = params[0]
+        self.pair_params = params[1]
+
+    def fit(self, train_df, val_df, params = None, callbacks = None):
+        if params is not None:
+            self.indep_params = params[0]
+            self.pair_params = params[1]
+        if callbacks is not None:
+            self.indep_callbacks = callbacks[0]
+            self.pair_callbacks = callbacks[1]
+
+
+        mutual_pairs, non_mutual = indep_mutual_split(train_df, MATCH_COLS)
+        mutual_pairs_val, non_mutual_val = indep_mutual_split(val_df, MATCH_COLS)
+        
+        #indep, non mutual
+        indep_features = [f.value for f in IndepFeature]
+        tags, labels, features = split_indep(non_mutual, indep_features)
+        tags_val, labels_val, features_val = split_indep(non_mutual_val, indep_features)
+
+        if self.indep_model is None:
+            indep_model = IndepClassifier(self.indep_params)
+        else:
+            indep_model = self.indep_model
+        indep_model.fit(features, labels, features_val, labels_val, self.indep_params, self.indep_callbacks)
+        self.indep_model = indep_model
+
+
+
+        #pairs, mutual
+        df = process_pair_features(mutual_pairs, MATCH_COLS)
+        df_val = process_pair_features(mutual_pairs_val, MATCH_COLS)
+
+        pair_features = FEATURE_COLS + SHARED_FEATURES
+        tags, labels, features = split_pairs(df, pair_features)
+        tags_val, labels_val, features_val = split_pairs(df_val, pair_features)
+
+        if self.pair_model is None:
+            pair_model = PairClassifier(self.pair_params)
+        else:
+            pair_model = self.pair_model
+        pair_model.fit(features, labels, features_val, labels_val, self.pair_params, self.pair_callbacks)
+        self.pair_model = pair_model
+        return self
+
+    def predict_proba(self, X):
+        mutual_pairs, non_mutual = indep_mutual_split(X, match_cols= MATCH_COLS)
+
+        features = non_mutual.select([f.value for f in IndepFeature])
+        indep_preds = self.indep_model.predict_proba(features)
+
+        pairs = process_pair_inference(mutual_pairs, MATCH_COLS) 
+        pair_preds = self.pair_model.predict_proba(pairs)
+        return indep_preds, pair_preds
+            
+        
+    def sample(self, indep_preds, pair_preds, rng):
+
+        return
+
+
+    def reassemble(self, X, indep_preds, pair_preds):
+        return
+
+
+
+tags, labels, features = load_class()
+classifier = FullClassifier()
+[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
+train_df = pl.concat([X, y, t], how = "horizontal")
+val_df = pl.concat([X_val, y_val, t_val], how = "horizontal")
+#classifier.fit(train_df, val_df)
+#classifier.save("models/full_classifier.joblib")
+classifier = FullClassifier.load("models/full_classifier.joblib")
+
+val_df = pl.concat([X_val, t_val], how = "horizontal")
+indep_preds, pair_preds = classifier.predict_proba(val_df)
+print(indep_preds)
+print(pair_preds)

@@ -1,10 +1,10 @@
 import sys
 import polars as pl
-from src.features.nn import build_nn_features
-from src.features.geo import build_geometry_features
-from src.features.quantization import build_angle_features
-from src.features.snr import build_snr_features
-from src.features.feature_selector import process_indep_features, process_pair_features, process_pos_features
+from src.feature_building.nn import build_nn_features
+from src.feature_building.geo import build_geometry_features
+from src.feature_building.quantization import build_angle_features
+from src.feature_building.snr import build_snr_features
+from src.feature_building.feature_selector import process_indep_features, process_pair_features, process_pos_features, process_classifier_features
 
 
 PATH = "data/raw"
@@ -76,3 +76,9 @@ pairs.write_csv("data/feature_cache/pair_features.csv")
 pos = process_pos_features(features)
 pos.write_csv("data/feature_cache/pos_features.csv")
 
+# Loading / caching full classifier features
+
+features = pl.read_csv("data/feature_cache/all_labels_features.csv")
+
+class_features = process_classifier_features(features)
+class_features.write_csv("data/feature_cache/full_class_features.csv")
