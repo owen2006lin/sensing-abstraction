@@ -27,8 +27,8 @@ def indep_mutual_split(df : pl.DataFrame, match_cols = MATCH_COLS) -> tuple[pl.D
 
     return mutual_pairs, non_mutual
 
-def process_indep_features(df : pl.DataFrame) -> pl.DataFrame:
-    (_ , indep) = indep_mutual_split(df)
+def process_indep_features(df : pl.DataFrame, match_cols = MATCH_COLS) -> pl.DataFrame:
+    (_ , indep) = indep_mutual_split(df, match_cols)
     feature_list = [f.value for f in IndepFeature]
     labels = indep.select("detected")
     features = indep.select(feature_list)
@@ -99,11 +99,20 @@ def process_pair_inference(df : pl.DataFrame, match_cols = MATCH_COLS):
 
 
 
+def process_classifier_features(df : pl.DataFrame) -> pl.DataFrame:
+    labels = df.select("detected")
+    tags = df.select(["scenario_id", "drop_id", "target_id"])
+    
+    features_indep = [f.value for f in IndepFeature]
+    features_pair = [f.value for f in PairFeature]
 
+    selected_features = list(set(features_indep) | set(features_pair))
+    df_selected = df[selected_features]
+    df_selected = df_selected.with_columns(labels)
 
-
-
-
+    df_selected = df_selected.with_columns(tags)
+    
+    return df_selected
 
 
 
@@ -133,21 +142,6 @@ def process_pos_features(df : pl.DataFrame) -> pl.DataFrame:
 
 
 
-
-def process_classifier_features(df : pl.DataFrame) -> pl.DataFrame:
-    labels = df.select("detected")
-    tags = df.select(["scenario_id", "drop_id", "target_id"])
-    
-    features_indep = [f.value for f in IndepFeature]
-    features_pair = [f.value for f in PairFeature]
-
-    selected_features = list(set(features_indep) | set(features_pair))
-    df_selected = df[selected_features]
-    df_selected = df_selected.with_columns(labels)
-
-    df_selected = df_selected.with_columns(tags)
-    
-    return df_selected
 
 
 

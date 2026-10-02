@@ -238,15 +238,37 @@ class FullClassifier(Component):
             
         
     def sample(self, indep_preds, pair_preds, rng):
+        indep_samples = self.indep_model.sample(indep_preds, rng)
+        pair_samples = self.pair_model.sample(pair_preds, rng)
+        return indep_samples, pair_samples
 
-        return
+    def reassemble(self, X, indep_samples, pair_samples):
+        merged_pair = pair_samples.select(
+            pl.concat_list("a_detected", "b_detected").alias("detected")
+        ).explode("detected")
+
+        df_idx = X.with_row_index("_row")
+        mutual, indep = indep_mutual_split(df_idx, MATCH_COLS)
+
+        labels = pl.concat([
+            mutual.select("_row").with_columns(detected=pl.Series(merged_pair)),
+            indep.select("_row").with_columns(detected=pl.Series(indep_samples)),
+        ])
+
+        df_out = (
+            df_idx.join(labels, on="_row", how="left")
+                .sort("_row")   # joins don't guarantee order, so sort explicitly
+                .drop("_row")
+        )
+
+        return df_out
 
 
-    def reassemble(self, X, indep_preds, pair_preds):
-        return
 
 
 
+
+'''
 tags, labels, features = load_class()
 classifier = FullClassifier()
 [X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
@@ -256,7 +278,10 @@ val_df = pl.concat([X_val, y_val, t_val], how = "horizontal")
 #classifier.save("models/full_classifier.joblib")
 classifier = FullClassifier.load("models/full_classifier.joblib")
 
+
+rng = np.random.default_rng(seed = 42)
 val_df = pl.concat([X_val, t_val], how = "horizontal")
 indep_preds, pair_preds = classifier.predict_proba(val_df)
-print(indep_preds)
-print(pair_preds)
+indep_samples, pair_samples = classifier.sample(indep_preds, pair_preds, rng)
+ret = classifier.reassemble(val_df, indep_samples, pair_samples)
+'''
