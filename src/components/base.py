@@ -14,7 +14,6 @@ class Component(ABC):
     def sample(self, X, rng):
         "Draw a random outcome using probs X"
 
-
     def save(self, path):
         joblib.dump(self, path)
 

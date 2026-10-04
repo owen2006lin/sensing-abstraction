@@ -97,15 +97,7 @@ class IndepClassifier(Component):
 tags, labels, features = load_indep()
 [X, X_val, y, y_val] = group_split(tags, labels, features)
 
-#classifier = IndepClassifier()
-#classifier.fit(X, y, callbacks=CALLBACKS)
-#classifier.save("models/indep_classifier.joblib")
 
-#classifier = IndepClassifier.load("models/indep_classifier.joblib")
-#preds = classifier.predict_proba(X_val)
-#print(preds)
-#rng = np.random.default_rng(seed = 42)
-#print(classifier.sample(preds, rng))
 
 #====================================Pair Classifier=======================#
 class PairClassifier(Component):
@@ -150,18 +142,6 @@ class PairClassifier(Component):
         )
         return df.select(["a_detected", "b_detected"])
 
-'''
-tags, labels, features = load_pairs()
-[X, X_val, y, y_val] = group_split(tags, labels, features)
-pair_classifier = PairClassifier()
-pair_classifier.fit(X,y,X_val,y_val, callbacks=CALLBACKS)
-pair_classifier.save("models/pair_classifier.joblib")
-pair_classifier = PairClassifier.load("models/pair_classifier.joblib")
-preds = pair_classifier.predict_proba(X_val)
-#samples = pair_classifier.sample(preds, rng)
-
-#print(samples)
-'''
 
 
 #======================================Full Classifier=======================#
@@ -173,8 +153,8 @@ from src.data.load import split_indep, split_pairs, load_class
 class FullClassifier(Component):
     def __init__(self, models = None, params = [INDEP_PARAMS, PAIR_PARAMS], callbacks = [CALLBACKS,CALLBACKS]):
         if not models:
-            self.indep_model = None
-            self.pair_model = None
+            self.indep_model = IndepClassifier()
+            self.pair_model = PairClassifier()
         else:
             self.indep_model = models[0]
             self.pair_model = models[1]
@@ -264,24 +244,3 @@ class FullClassifier(Component):
         return df_out
 
 
-
-
-
-
-'''
-tags, labels, features = load_class()
-classifier = FullClassifier()
-[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
-train_df = pl.concat([X, y, t], how = "horizontal")
-val_df = pl.concat([X_val, y_val, t_val], how = "horizontal")
-#classifier.fit(train_df, val_df)
-#classifier.save("models/full_classifier.joblib")
-classifier = FullClassifier.load("models/full_classifier.joblib")
-
-
-rng = np.random.default_rng(seed = 42)
-val_df = pl.concat([X_val, t_val], how = "horizontal")
-indep_preds, pair_preds = classifier.predict_proba(val_df)
-indep_samples, pair_samples = classifier.sample(indep_preds, pair_preds, rng)
-ret = classifier.reassemble(val_df, indep_samples, pair_samples)
-'''
