@@ -79,18 +79,6 @@ class BulkModel(Component):
             ).select("sampled_error")
         
         return outputs
-'''
-b_model = BulkModel()
-df = pl.concat([X, y], how = "horizontal")
-df = df.filter(pl.col("region_txt") == "bulk")
-X1 = df.select("bistatic_range_m")
-y1 = df.select("range_error_m")
-
-residuals = b_model.fit(X1, y1)
-rng = np.random.default_rng(seed = 42)
-samples = b_model.sample(X1, rng)
-print(samples)
-'''
 
     
 class NonBulkModel(Component):
@@ -142,18 +130,3 @@ class NonBulkModel(Component):
         ret = pl.DataFrame({"sampled_error" : ret})
 
         return ret
-
-'''
-df = pl.concat([X, y], how = "horizontal")
-df = df.filter(pl.col("region_txt") != "bulk")
-X = df.select(["nn_norm_range_sep", "range_error_m"])
-y = df.select(["region_txt", "region"])
-nb_model = NonBulkModel()
-distributions = nb_model.fit(X,y)
-
-rng = np.random.default_rng(seed = 42)
-df = pl.concat([X,y], how = "horizontal")
-samples = nb_model.sample(df, rng)
-print(samples)
-'''
-

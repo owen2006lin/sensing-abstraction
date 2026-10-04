@@ -5,33 +5,13 @@ from src.feature_building.geo import build_geometry_features
 from src.feature_building.quantization import build_angle_features
 from src.feature_building.snr import build_snr_features
 from src.feature_building.feature_selector import process_indep_features, process_pair_features, process_pos_features, process_classifier_features
-
+from src.data.load import load_raw, label_error
 
 PATH = "data/raw"
 csvs = ["target", "detection", "error", "snr"]
 KEYS = ['scenario_id', 'drop_id', 'target_id']
 
 
-def load_raw(path : str = PATH, names : list[str] = csvs) -> list[pl.DataFrame]:
-    dfs = []
-    for name in names:
-        df = pl.read_csv(f"{path}/{name}.csv")
-        dfs.append(df.with_columns(pl.col(pl.Float64, pl.Float32).fill_nan(None)))
-    return dfs
-
-# For now, targets don't have an explicit detected/not label which is super annoying
-def label_error(error : pl.DataFrame) -> pl.DataFrame:
-    error = error.with_columns(
-        pl.col("position_error_x_m").is_not_null().cast(pl.Int8).alias("detected")
-    )
-    return error
-
-def combine(target: pl.DataFrame, detect : pl.DataFrame, error: pl.DataFrame, snr: pl.DataFrame):
-    error = label_error(error)
-    snr = build_snr_features(snr)
-    combined = target.join(error, on = KEYS, how = "left").join(snr, on = KEYS, how = "left")
-
-    return combined
 
 
 #---------------------------------------------------------------Example Usage----------------------------------------------------------------#

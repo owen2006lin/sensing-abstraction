@@ -137,8 +137,8 @@ class PairClassifier(Component):
         sampled_indices = [rng.choice(len(row), p = row) for row in X]
         df = pl.DataFrame(sampled_indices, schema = ["score"])
         df = df.with_columns(
-            pl.col("score").is_in([1,3]).alias("a_detected"),
-            pl.col("score").is_in([2,3]).alias("b_detected")
+            pl.col("score").is_in([2,3]).alias("a_detected"),
+            pl.col("score").is_in([1,3]).alias("b_detected")
         )
         return df.select(["a_detected", "b_detected"])
 

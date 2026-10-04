@@ -4,7 +4,7 @@ from pathlib import Path
 from sklearn.model_selection import GroupShuffleSplit
 from src.data.features import IndepFeature, PairFeature, PosFeature
 from sklearn.model_selection import train_test_split
-
+from src.feature_building.snr import build_snr_features
 
 CACHE_PATH = "data/feature_cache/"
 INDEP_NAME = "indep_features.csv"
@@ -26,7 +26,30 @@ MATCH_COLS = [
     "nearest_neighbor_norm_rx_angle_sep",
 ]
 
+PATH = "data/raw"
+csvs = ["target", "detection", "error", "snr"]
+KEYS = ['scenario_id', 'drop_id', 'target_id']
 
+def load_raw(path : str = PATH, names : list[str] = csvs) -> list[pl.DataFrame]:
+    dfs = []
+    for name in names:
+        df = pl.read_csv(f"{path}/{name}.csv")
+        dfs.append(df.with_columns(pl.col(pl.Float64, pl.Float32).fill_nan(None)))
+    return dfs
+
+# For now, targets don't have an explicit detected/not label which is super annoying
+def label_error(error : pl.DataFrame) -> pl.DataFrame:
+    error = error.with_columns(
+        pl.col("position_error_x_m").is_not_null().cast(pl.Int8).alias("detected")
+    )
+    return error
+
+def combine(target: pl.DataFrame, detect : pl.DataFrame, error: pl.DataFrame, snr: pl.DataFrame):
+    error = label_error(error)
+    snr = build_snr_features(snr)
+    combined = target.join(error, on = KEYS, how = "left").join(snr, on = KEYS, how = "left")
+
+    return combined
 
 def group_split(tags, labels, features, return_tags = False):
     groups = tags.select(pl.struct(["scenario_id", "drop_id"]).hash()).to_series().to_numpy()
