@@ -48,10 +48,3 @@ class AngleModel():
         )
 
         return df
-
-tags, labels, features = load_pos()
-[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags=True)
-model = AngleModel()
-model.fit(X,y, print_params=True)
-u,v = model.predict_proba(X_val)
-samples = model.sample(X_val, u, v, rng = np.random.default_rng(seed = 42))

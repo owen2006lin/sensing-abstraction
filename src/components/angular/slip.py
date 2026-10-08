@@ -215,11 +215,3 @@ class SlipModel(Component):
         return df
 
 
-#model = SlipModel()
-#model.fit(X, y, print_params=True)
-#u,v = model.predict_proba(X_val)
-#samples = model.sample(X_val, u,v,rng = np.random.default_rng(seed = 42))
-
-
-
-

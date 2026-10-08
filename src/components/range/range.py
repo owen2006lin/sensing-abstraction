@@ -32,7 +32,11 @@ class RangeModel(Component):
         val_df = val_df.with_columns(label_regime(val_df))
         X = train_df.select(["bistatic_range_m", "nn_norm_range_sep"])
         y = train_df.select(["range_error_m", "region_txt"])
-        self.bulk_model.fit(X, y)
+
+        bulk = train_df.filter(pl.col("region_txt") == "bulk")
+        self.bulk_model.fit(bulk.select(["bistatic_range_m", "nn_norm_range_sep"]),
+                    bulk.select(["range_error_m", "region_txt"]))
+
         self.non_bulk_model.fit(X, y)
         return out_of_fold, oof_cal, b_final, models
 

@@ -1,6 +1,6 @@
 from src.data.load import load_class, load_pos, group_split, split_pairs, FEATURE_COLS, SHARED_FEATURES
 from src.components.detection import FullClassifier, MATCH_COLS
-from src.evaluation.classes import ConstantClassifier, MDNClassifier, ERROR_COLS
+from evaluation.detection_classes import ConstantClassifier, MDNClassifier, PairMDNClassifier, MDN_PARAMS, PAIR_MDN_PARAMS, ERROR_COLS
 from src.evaluation.c2st_classes import C2ST
 from src.data.features import IndepFeature
 from src.feature_building.feature_selector import indep_mutual_split, process_pair_features
@@ -512,10 +512,16 @@ b4.save("src/evaluation/models/MDN.joblib")
 b1_indep_preds, b1_pair_preds = to_branch_preds(full_classifier, inf_df, b1.predict_proba(inf_df), len(indep_preds), len(pair_preds))
 b4_indep_preds, b4_pair_preds = to_branch_preds(full_classifier, inf_df, b4.predict_proba(inf_df), len(indep_preds), len(pair_preds))
 
+# B5 : MDN with the same indep / mutual split as full_classifier, inner group split for early stopping
+[train_b5, val_b5, _, _] = group_split(t, y, train_df)
+b5 = FullClassifier(models = [MDNClassifier(), PairMDNClassifier()], params = [MDN_PARAMS, PAIR_MDN_PARAMS], callbacks = [None, None]).fit(train_b5, val_b5)
+b5_indep_preds, b5_pair_preds = b5.predict_proba(inf_df)
+
 models = {
     "constant rate" : constant_preds(train_df, indep_preds, pair_preds),
     "B1" : (b1_indep_preds, b1_pair_preds),
     "B4" : (b4_indep_preds, b4_pair_preds),
+    "B5" : (b5_indep_preds, b5_pair_preds),
     "full classifier" : (indep_preds, pair_preds)
 }
 
