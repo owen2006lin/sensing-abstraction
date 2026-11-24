@@ -1,6 +1,6 @@
-from src.data.load import load_class, load_pos, group_split, split_pairs, FEATURE_COLS, SHARED_FEATURES
+from src.data.load import load_pos, split_pairs, FEATURE_COLS, SHARED_FEATURES
 from src.components.detection import FullClassifier, MATCH_COLS
-from evaluation.detection_classes import ConstantClassifier, MDNClassifier, PairMDNClassifier, MDN_PARAMS, PAIR_MDN_PARAMS, ERROR_COLS
+from src.evaluation.detection_classes import ERROR_COLS
 from src.evaluation.c2st_classes import C2ST
 from src.data.features import IndepFeature
 from src.feature_building.feature_selector import indep_mutual_split, process_pair_features
@@ -9,17 +9,8 @@ import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 
-
-MODEL_PATH = "models/full_classifier.joblib"
-
-tags, labels, features = load_class()
-[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
-
-full_classifier = FullClassifier.load(MODEL_PATH)
-train_df = pl.concat([X, y, t], how = "horizontal")
-inf_df = pl.concat([X_val, t_val], how = "horizontal")
-indep_preds, pair_preds = full_classifier.predict_proba(inf_df)
-y_val = y_val.to_numpy().ravel()
+# Test functions for the detection models. scripts/detection_test.py runs every test and saves the results,
+# plot_* functions return the plotly figure (call .show() or .write_html() on it)
 
 
 # (1) Expected calibration error (equal mass bins, same as indep_calibration_tests)
@@ -102,15 +93,8 @@ def plot_mc_null(observed, null_eces, p_value, n_bins):
         yaxis_title = "count",
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
-#--------------------------------------------------------------------------------------------------------------------#
-
-# Example usage:
-'''
-observed, null_eces, p_value = mc_null_ece(full_classifier, inf_df, y_val, indep_preds, pair_preds, n_bins = 15)
-plot_mc_null(observed, null_eces, p_value, n_bins = 15)
-'''
 #--------------------------------------------------------------------------------------------------------------------#
 
 
@@ -345,7 +329,9 @@ def slice_metrics(model : FullClassifier, X, labels, models : dict, feature : st
     return pl.DataFrame(rows)
 
 
+# Returns {metric : figure}, one figure per metric
 def plot_slices(slices : pl.DataFrame, feature : str):
+    figs = {}
     for metric in ["auroc", "brier"]:
         fig = go.Figure()
         for name in slices["model"].unique(maintain_order = True):
@@ -358,12 +344,13 @@ def plot_slices(slices : pl.DataFrame, feature : str):
             yaxis_title = metric,
             template = "simple_white"
         )
-        fig.show()
+        figs[metric] = fig
+    return figs
 
 #--------------------------------------------------------------------------------------------------------------------#
 
-# (8) Baselines B1 (ConstantClassifier) and B4 (MDNClassifier) from src.evaluation.classes
-# Both output a per point P(detected) with no pair coupling, so convert them into the FullClassifier
+# (8) Per point baselines (eg ConstantClassifier from src.evaluation.detection_classes)
+# These output a per point P(detected) with no pair coupling, so convert them into the FullClassifier
 # (indep_preds, pair_preds) format with the pair joint = product of marginals (independence)
 
 def to_branch_preds(model : FullClassifier, X, point_preds, n_indep : int, n_pairs : int):
@@ -397,7 +384,7 @@ def baseline_labels(labels, tags, error_cols = ERROR_COLS):
 # (9) C2ST : classifier two sample test
 # Real rows = (features, ISAC detected), synthetic rows = (same features, detected sampled from the model)
 # nn_detected = the mutual partner's detected (null for non mutual points) so the discriminator can also catch
-# a wrong joint, eg B4 / B1 treating mutual pairs as independent
+# a wrong joint, eg the constant classifier treating mutual pairs as independent
 # Null : train the same C2ST on two independent synthetic draws, AUC under "model is the truth"
 
 C2ST_FEATURES = [f.value for f in IndepFeature]
@@ -481,7 +468,7 @@ def plot_c2st_null(c2st : C2ST, null_aucs, p_value, name : str):
         yaxis_title = "count",
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
 # Which features the discriminator leans on, eg detected / nn_detected interactions point at the joint
 def plot_c2st_importance(c2st : C2ST, name : str, top_k : int = 15):
@@ -493,64 +480,8 @@ def plot_c2st_importance(c2st : C2ST, name : str, top_k : int = 15):
         yaxis = dict(autorange = "reversed"),
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
 #--------------------------------------------------------------------------------------------------------------------#
-
-# Example usage:
-
-# ---- Setup : fit baselines B1, B4 and collect every model in (indep_preds, pair_preds) format ----
-y_base = baseline_labels(y, t)
-b1 = ConstantClassifier().fit(X, y_base)
-b1.save("src/evaluation/models/constant.joblib")
-
-# inner group split of the train set for early stopping, so the eval set stays held out
-[X_b4, X_b4_val, y_b4, y_b4_val] = group_split(t, y_base, X)
-b4 = MDNClassifier().fit(X_b4, y_b4, X_b4_val, y_b4_val)
-b4.save("src/evaluation/models/MDN.joblib")
-
-b1_indep_preds, b1_pair_preds = to_branch_preds(full_classifier, inf_df, b1.predict_proba(inf_df), len(indep_preds), len(pair_preds))
-b4_indep_preds, b4_pair_preds = to_branch_preds(full_classifier, inf_df, b4.predict_proba(inf_df), len(indep_preds), len(pair_preds))
-
-# B5 : MDN with the same indep / mutual split as full_classifier, inner group split for early stopping
-[train_b5, val_b5, _, _] = group_split(t, y, train_df)
-b5 = FullClassifier(models = [MDNClassifier(), PairMDNClassifier()], params = [MDN_PARAMS, PAIR_MDN_PARAMS], callbacks = [None, None]).fit(train_b5, val_b5)
-b5_indep_preds, b5_pair_preds = b5.predict_proba(inf_df)
-
-models = {
-    "constant rate" : constant_preds(train_df, indep_preds, pair_preds),
-    "B1" : (b1_indep_preds, b1_pair_preds),
-    "B4" : (b4_indep_preds, b4_pair_preds),
-    "B5" : (b5_indep_preds, b5_pair_preds),
-    "full classifier" : (indep_preds, pair_preds)
-}
-
-# ---- (5), (6) Brier + Murphy decomposition, AUROC, per branch with scene bootstrap CIs ----
-scores = score_models(full_classifier, inf_df, y_val, models, n_bins = 15, n_boot = 1000)
-print_tables(scores)
-
-# ---- (3) MC null ECE ----
-# MC null ECE for the baselines. full_classifier is only used for its samplers + reassemble(), which are generic
-# bernoulli / categorical draws, so sampling the independent joint is the same as B1 / B4 .sample()
-for name in ["B1", "B4", "full classifier"]:
-    observed, null_eces, p_value = mc_null_ece(full_classifier, inf_df, y_val, *models[name], n_bins = 15)
-    plot_mc_null(observed, null_eces, p_value, n_bins = 15)
-
-# ---- (7) Appendix : AUROC / Brier sliced by range and angle ----
-
-for feature in SLICE_FEATURES:
-    slices = slice_metrics(full_classifier, inf_df, y_val, models, feature, n_bins = 8)
-    plot_slices(slices, feature)
-
-
-# ---- (9) C2ST : real vs synthetic discriminator, null from synthetic vs synthetic ----
-'''
-c2st_table, c2st_results = c2st_models(full_classifier, inf_df, y_val, models, n_null = 20)
-print(c2st_table)
-for name, (c2st, null_aucs, p_value) in c2st_results.items():
-    plot_c2st_null(c2st, null_aucs, p_value, name)
-    plot_c2st_importance(c2st, name)
-'''
-    #--------------------------------------------------------------------------------------------------------------------#
 
 

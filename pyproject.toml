@@ -35,7 +35,7 @@ build-backend = "uv_build"
 package = false
 
 [tool.uv.sources]
-lightgbm = { path = "/home/owen-0g/LightGBM/dist/lightgbm-4.7.0.99-py3-none-any.whl" }
+lightgbm = { path = "../LightGBM/dist/lightgbm-4.7.0.99-py3-none-linux_x86_64.whl" }
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

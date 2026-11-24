@@ -10,7 +10,7 @@ from sklearn.preprocessing import StandardScaler
 # Measurement space errors the baselines sample for detected points (columns from load_pos())
 ERROR_COLS = ["range_error_m", "rx_azimuth_error_deg", "rx_elevation_error_deg"]
 
-#====================================B1 : Constant Rate + Gaussian Error=======================#
+#====================================Constant Classifier : Constant Rate + Gaussian Error=======================#
 # One detection rate for every point, errors drawn from a single multivariate gaussian fit on detected points
 # y : DataFrame with "detected" and optionally error columns (null where missed)
 
@@ -47,7 +47,7 @@ class ConstantClassifier(Component):
 
 
 
-#====================================B4 : MLP Classifier=======================#
+#====================================MLP, non mutual points=======================#
 # sklearn MLP on IndepFeature columns with a sigmoid head for P(detected), no error model
 # y : DataFrame with "detected" (any error columns are ignored)
 
@@ -96,7 +96,7 @@ class MDNClassifier(Component):
 
 
 
-#====================================B5 : Split MDN (indep + mutual pairs)=======================#
+#====================================MLP, mutual pairs (with the class above : the MLP baseline)=======================#
 # Same indep / mutual split as FullClassifier : MDNClassifier on non mutual points, and this pair net on mutual pairs
 # sklearn MLP with a 4 way softmax over the joint (0 neither, 1 only b, 2 only a, 3 both)
 # Use as FullClassifier(models = [MDNClassifier(), PairMDNClassifier()], params = [MDN_PARAMS, PAIR_MDN_PARAMS], callbacks = [None, None])

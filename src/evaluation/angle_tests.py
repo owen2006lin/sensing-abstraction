@@ -1,26 +1,17 @@
-from src.data.load import load_pos, group_split
-from src.components.position import FullPositionModel
 from src.components.angular.quantization import AngleModel
-from src.evaluation.error_metrics import (scene_ids, tile_frame, to_draws, w1_null, plot_w1_null, score_models,
-                                          print_table, slice_metrics, plot_slices, plot_marginals)
+from src.evaluation.error_metrics import tile_frame, to_draws
 import numpy as np
 import polars as pl
 
+# Draw generators for the angle error tests, scored with the shared metrics in src.evaluation.error_metrics
+# scripts/angle_test.py runs every test and saves the results
 
-MODEL_PATH = "models/position_model.joblib"
+
 # model output column -> ISAC label column, az and el are tested separately
 AXES = {
     "az" : ("az_err", "rx_azimuth_error_deg"),
     "el" : ("el_err", "rx_elevation_error_deg")
 }
-
-# Same group split as the notebook that trained position_model, so X_val is held out
-tags, labels, features = load_pos()
-[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
-
-pos_model = FullPositionModel.load(MODEL_PATH)
-angle_model = pos_model.angle_model
-scene = scene_ids(t_val)
 
 
 # (1) Draws matrices from the angle model : {axis : (n_points, n_draws)}
@@ -45,37 +36,5 @@ def climatology_draws(y_train : pl.DataFrame, n_points : int, n_draws : int, rng
             for axis, (_, label_col) in AXES.items()}
 
 
+# W1 is sliced by these covariates to check p(error | feature), not just the pooled marginal
 SLICE_FEATURES = ["az_off_boresight", "rx_elevation_deg", "nn_norm_range_sep"]
-
-#--------------------------------------------------------------------------------------------------------------------#
-
-# Example usage:
-
-# ---- Setup : draws for the angle model and baselines ----
-N_DRAWS = 30
-rng = np.random.default_rng(seed = 42)
-
-draws = {
-    "climatology" : climatology_draws(y, len(X_val), N_DRAWS, rng),
-    "no slip" : no_slip_draws(angle_model, X_val, N_DRAWS, rng),
-    "angle model" : sample_angles(angle_model, X_val, N_DRAWS, rng)
-}
-
-for axis, (_, label_col) in AXES.items():
-    y_true = y_val[label_col].to_numpy()
-    models = {name : d[axis] for name, d in draws.items()}
-
-    # ---- (1) - (5) Pooled W1, MC null p, scene bootstrap CIs ----
-    scores = score_models(y_true, scene, models, n_boot = 1000)
-    print_table(scores, f"{axis} error (deg)")
-
-    # ---- MC null W1 for the angle model ----
-    observed, null, p_value = w1_null(y_true, models["angle model"])
-    plot_w1_null(observed, null, p_value, f"{axis} error", "deg")
-
-    plot_marginals(y_true, models, f"{axis} error marginal", f"{axis} error (deg)")
-
-    # ---- (6) W1 sliced by geometry and neighbor separation ----
-    for feature in SLICE_FEATURES:
-        slices = slice_metrics(X_val, y_true, models, feature, n_bins = 8)
-        plot_slices(slices, feature, f"{axis} error")

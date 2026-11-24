@@ -69,15 +69,19 @@ def build_slip_features(features, labels):
     slip_tags = slip_features.select("type")
     slip_features = slip_features.drop("type")
 
-    MAX_RANGE = slip_features["nn_norm_range_sep"].max()
+    # Targets with no neighbor (null nn_norm_range_sep) are treated as the farthest seen in training.
+    # Returned so SlipModel can store it and reuse the same fill value at inference
+    max_range = slip_features["nn_norm_range_sep"].cast(pl.Float64).max()
     slip_features = slip_features.select(
         edge = (0.5 - pl.col("abs_frac") + EDGE_MIN).log(),
-        close = ((-pl.col("nn_norm_range_sep").cast(pl.Float64).fill_null(MAX_RANGE)) / CLOSE_SCALE).exp(),
+        close = ((-pl.col("nn_norm_range_sep").cast(pl.Float64).fill_null(max_range)) / CLOSE_SCALE).exp(),
         rss = pl.col("rss_max")
     )
-    return slip_labels, slip_tags, slip_features
+    return slip_labels, slip_tags, slip_features, max_range
 
-def build_slip_inference(features):
+# max_range : training max of nn_norm_range_sep (SlipModel.max_range), not the inference batch max, so the
+# close feature is scaled the same as in training and batches where every target lacks a neighbor still work
+def build_slip_inference(features, max_range):
     slip_features_u = (features.select(["rss_max", "nn_norm_range_sep", "abs_frac_u"]) 
                         .rename({"abs_frac_u" : "abs_frac"})
                         .with_columns(
@@ -92,10 +96,9 @@ def build_slip_inference(features):
                                 )
                         )
     slip_features = slip_features_u.vstack(slip_features_v)
-    MAX_RANGE = slip_features["nn_norm_range_sep"].max()
     slip_features = slip_features.select(
         edge = (0.5 - pl.col("abs_frac") + EDGE_MIN).log(),
-        close = ((-pl.col("nn_norm_range_sep").cast(pl.Float64).fill_null(MAX_RANGE)) / CLOSE_SCALE).exp(),
+        close = ((-pl.col("nn_norm_range_sep").cast(pl.Float64).fill_null(max_range)) / CLOSE_SCALE).exp(),
         rss = pl.col("rss_max"),
         type = pl.col("type")
     )
@@ -144,7 +147,7 @@ class SlipModel(Component):
         self.mag_model = mag_model if mag_model is not None else SlipMagModel()
 
     def fit(self, X, y, print_params = False):
-        slip_labels, _, slip_features = build_slip_features(X,y)
+        slip_labels, _, slip_features, self.max_range = build_slip_features(X,y)
         self.model.fit(slip_features,slip_labels)
         self.mag_model.fit(X, y)
         if print_params:
@@ -157,7 +160,7 @@ class SlipModel(Component):
 
 
     def predict_proba(self, X):
-        u, v = build_slip_inference(X)
+        u, v = build_slip_inference(X, self.max_range)
         p_u = self.model.predict_proba(u)
         p_v = self.model.predict_proba(v)
         return p_u[:,1], p_v[:,1]

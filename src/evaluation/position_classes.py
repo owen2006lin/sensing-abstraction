@@ -7,7 +7,7 @@ import polars as pl
 # 3D position error label from load_pos()
 ERROR_COL = "position_error_3d_m"
 
-#====================================B2 : Direct Quantile GBM=======================#
+#====================================Direct Quantile GBM (baseline for the 3D position error tests)=======================#
 # Predicts the 3D position error straight from the features, no range / angle decomposition or geometry
 # One LightGBM quantile regressor per level in TAUS, fit on log(error) : quantiles are invariant under monotone
 # transforms, so exp() of the log quantiles are the error quantiles, and samples stay positive

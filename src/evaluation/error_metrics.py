@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 # Shared metrics for the measurement error tests (range_tests, angle_tests)
 # Every model is represented by a draws matrix of shape (n_points, n_draws) : n_draws independent samples of the error
 # for each evaluation point, so baselines just need to output the same format
+# plot_* functions return the plotly figure (call .show() or .write_html() on it)
 
 
 # Scene = (scenario_id, drop_id), same grouping as group_split
@@ -61,7 +62,7 @@ def plot_w1_null(observed, null, p_value, title : str, unit : str):
         yaxis_title = "count",
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
 
 # (3) CRPS, fair ensemble estimator per point
@@ -177,7 +178,9 @@ def slice_metrics(X : pl.DataFrame, real, models : dict, feature : str, n_bins :
     return pl.DataFrame(rows)
 
 
+# Returns {metric : figure}, one figure per metric
 def plot_slices(slices : pl.DataFrame, feature : str, title : str = ""):
+    figs = {}
     for metric in [m for m in ["w1", "crps"] if m in slices.columns]:
         fig = go.Figure()
         for name in slices["model"].unique(maintain_order = True):
@@ -190,7 +193,8 @@ def plot_slices(slices : pl.DataFrame, feature : str, title : str = ""):
             yaxis_title = metric,
             template = "simple_white"
         )
-        fig.show()
+        figs[metric] = fig
+    return figs
 
 
 # Overlaid real vs pooled model histograms, to see where the W1 comes from
@@ -212,4 +216,4 @@ def plot_marginals(real, models : dict, title : str, unit : str, clip = None):
         yaxis_title = "density",
         template = "simple_white"
     )
-    fig.show()
+    return fig

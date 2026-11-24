@@ -1,29 +1,19 @@
-from src.data.load import load_pos, group_split
 from src.components.position import FullPositionModel
-from src.evaluation.position_classes import QuantileErrorModel, ERROR_COL
+from src.evaluation.position_classes import QuantileErrorModel
 from src.evaluation.c2st_classes import C2ST
-from src.evaluation.error_metrics import (scene_ids, tile_frame, to_draws, w1_null, plot_w1_null, score_models,
-                                          print_table, slice_metrics, plot_slices, plot_marginals)
+from src.evaluation.error_metrics import tile_frame, to_draws
 from src.data.features import PosFeature
 import numpy as np
 import polars as pl
 import plotly.graph_objects as go
 
+# Draw generators, baselines and the C2ST for the 3D position error tests, scored with the shared metrics in
+# src.evaluation.error_metrics. scripts/position_test.py runs every test and saves the results
+# plot_* functions return the plotly figure (call .show() or .write_html() on it)
 
-MODEL_PATH = "models/position_model.joblib"
-BASELINE_PATH = "src/evaluation/models/quantile.joblib"
-# FullPositionModel output column for the exact 3D error, compared against ERROR_COL
+
+# FullPositionModel output column for the exact 3D error, compared against ERROR_COL (src.evaluation.position_classes)
 OUT_COL = "err_3d"
-
-# Same group split as the notebook that trained position_model, so X_val is held out
-tags, labels, features = load_pos()
-[X, X_val, y, y_val, t, t_val] = group_split(tags, labels, features, return_tags = True)
-
-pos_model = FullPositionModel.load(MODEL_PATH)
-
-y_train = y[ERROR_COL].to_numpy()
-y_true = y_val[ERROR_COL].to_numpy()
-scene = scene_ids(t_val)
 
 
 # (1) Draws matrix from the full position model : (n_points, n_draws)
@@ -39,13 +29,14 @@ def sample_position(model : FullPositionModel, X, n_draws : int, rng):
 def climatology_draws(y_train, n_points : int, n_draws : int, rng):
     return rng.choice(y_train, size = (n_points, n_draws), replace = True)
 
-# Direct : B2 quantile GBM straight from features to 3D error. Quantiles only depend on the features, so predict once and tile
+# Direct quantile : quantile GBM (QuantileErrorModel) straight from features to 3D error. Quantiles only depend on the features, so predict once and tile
 def direct_draws(model : QuantileErrorModel, X, n_draws : int, rng):
     quantiles = model.predict_proba(X)
     samples = model.sample(np.tile(quantiles, (n_draws, 1)), rng)
     return to_draws(samples[OUT_COL].to_numpy(), len(X), n_draws)
 
 
+# W1 / CRPS are sliced by these covariates to check p(error | feature), not just the pooled marginal
 SLICE_FEATURES = ["bistatic_range_m", "rx_elevation_deg", "az_off_boresight", "nn_norm_range_sep"]
 
 #--------------------------------------------------------------------------------------------------------------------#
@@ -111,7 +102,7 @@ def plot_c2st_null(c2st : C2ST, null_aucs, p_value, name : str):
         yaxis_title = "count",
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
 # Which features the discriminator leans on, eg err_3d x bistatic_range_m points at a range dependent miss
 def plot_c2st_importance(c2st : C2ST, name : str, top_k : int = 15):
@@ -123,48 +114,6 @@ def plot_c2st_importance(c2st : C2ST, name : str, top_k : int = 15):
         yaxis = dict(autorange = "reversed"),
         template = "simple_white"
     )
-    fig.show()
+    return fig
 
 #--------------------------------------------------------------------------------------------------------------------#
-
-# Example usage:
-
-# ---- Setup : fit B2 (direct quantile GBM), draws for the position model and baselines ----
-# inner group split of the train set for early stopping, so the eval set stays held out
-[X_b2, X_b2_val, y_b2, y_b2_val] = group_split(t, y, X)
-b2 = QuantileErrorModel().fit(X_b2, y_b2, X_b2_val, y_b2_val)
-b2.save(BASELINE_PATH)
-
-# n_draws >= 2 * n_null + 1 so the C2ST null pairs come from the same draws
-N_DRAWS = 41
-N_NULL = 20
-rng = np.random.default_rng(seed = 42)
-
-models = {
-    "climatology" : climatology_draws(y_train, len(y_true), N_DRAWS, rng),
-    "direct (B2)" : direct_draws(b2, X_val, N_DRAWS, rng),
-    "position model" : sample_position(pos_model, X_val, N_DRAWS, rng)
-}
-
-# ---- (1) - (2) Pooled W1, MC null p, CRPS + CRPSS vs climatology, scene bootstrap CIs ----
-scores = score_models(y_true, scene, models, crps = True, ref = "climatology", n_boot = 1000)
-print_table(scores, "3D position error (m)")
-
-# ---- MC null W1 for the position model and the direct baseline ----
-for name in ["direct (B2)", "position model"]:
-    observed, null, p_value = w1_null(y_true, models[name])
-    plot_w1_null(observed, null, p_value, f"3D error {name}", "m")
-
-plot_marginals(y_true, models, "3D position error marginal", "3D error (m)")
-
-# ---- W1 / CRPS sliced by geometry and neighbor separation ----
-for feature in SLICE_FEATURES:
-    slices = slice_metrics(X_val, y_true, models, feature, n_bins = 8, crps = True)
-    plot_slices(slices, feature, "3D error")
-
-# ---- (3) C2ST : real vs synthetic discriminator, position model vs direct baseline ----
-c2st_table, c2st_results = c2st_models(X_val, y_true, scene, models, n_null = N_NULL)
-print(c2st_table)
-for name, (c2st, null_aucs, p_value) in c2st_results.items():
-    plot_c2st_null(c2st, null_aucs, p_value, name)
-    plot_c2st_importance(c2st, name)

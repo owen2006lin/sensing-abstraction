@@ -1,3 +1,9 @@
 *.html
 .venv/
 *.csv
+# tooling / outputs
+graphify-out/
+.claude/
+CLAUDE.md
+.vscode/
+results/
